@@ -8,72 +8,6 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
-// Add these at the top of the file, after imports
-process.on('uncaughtException', (error) => {
-  console.error('🚨 UNCAUGHT EXCEPTION:', {
-    error: error.message,
-    stack: error.stack,
-    timestamp: new Date().toISOString()
-  });
-  // Log to Modal dashboard before exit
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('🚨 UNHANDLED REJECTION:', {
-    reason: reason instanceof Error ? reason.message : reason,
-    stack: reason instanceof Error ? reason.stack : undefined,
-    timestamp: new Date().toISOString()
-  });
-  // Log to Modal dashboard before exit
-  process.exit(1);
-});
-
-// Handle graceful shutdown
-process.on('SIGINT', () => {
-  console.log('🛑 SIGINT received, shutting down gracefully');
-  shutdown();
-});
-
-process.on('SIGTERM', () => {
-  console.log('🛑 SIGTERM received, shutting down gracefully');
-  shutdown();
-});
-
-// Shutdown function
-async function shutdown() {
-  try {
-    // Close WebSocket connections
-    if (io) {
-      console.log('🔌 Closing WebSocket connections...');
-      io.close();
-    }
-    
-    // Clean up LLM adapter resources
-    if (llmAdapter && typeof llmAdapter.cleanup === 'function') {
-      console.log('🧹 Cleaning up LLM adapter...');
-      llmAdapter.cleanup();
-    }
-    
-    // Close HTTP server
-    if (server) {
-      console.log('🔌 Closing HTTP server...');
-      await new Promise<void>((resolve) => {
-        server.close(() => {
-          console.log('✅ HTTP server closed');
-          resolve();
-        });
-      });
-    }
-    
-    console.log('✅ Graceful shutdown completed');
-    process.exit(0);
-  } catch (error) {
-    console.error('❌ Error during shutdown:', error);
-    process.exit(1);
-  }
-}
-
 import { ChatService } from './services/chatService';
 import { LangDBAdapter } from './services/langdbAdapter';
 import personasRouter from './routes/personas';
@@ -93,13 +27,88 @@ const io = new Server(server, {
   transports: ['websocket', 'polling']
 });
 
-// Middleware
-app.use(helmet());
-app.use(cors());
-app.use(express.json());
+// Create a Socket.IO namespace with CORS options
+const dialogNamespace = io.of('/dialogs');
 
 // Routes
 app.use('/api/personas', personasRouter);
+
+// Add Railway health check endpoints
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+// Add Railway-specific ready check
+app.get('/ready', (req, res) => {
+  res.status(200).json({ 
+    status: 'ready',
+    timestamp: new Date().toISOString(),
+    connections: io ? io.engine.clientsCount : 0
+  });
+});
+
+// Add these signal handlers BEFORE the server.listen() call
+
+// Graceful shutdown handling
+let serverClosed = false;
+
+const gracefulShutdown = async (signal: string) => {
+  if (serverClosed) return;
+  
+  serverClosed = true;
+  console.log(`${signal} received, shutting down gracefully...`);
+  
+  try {
+    // Close WebSocket connections
+    if (io) {
+      io.close(() => {
+        console.log('WebSocket server closed');
+      });
+    }
+    
+    // Close HTTP server
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        console.log('HTTP server closed');
+        resolve();
+      });
+    });
+    
+    console.log('Server shutdown complete');
+    process.exit(0);
+  } catch (error) {
+    console.error('Error during shutdown:', error);
+    process.exit(1);
+  }
+};
+
+// Handle SIGTERM (graceful shutdown)
+process.on('SIGTERM', () => {
+  console.log('SIGTERM signal received');
+  gracefulShutdown('SIGTERM');
+});
+
+// Handle SIGINT (Ctrl+C)
+process.on('SIGINT', () => {
+  console.log('SIGINT signal received');
+  gracefulShutdown('SIGINT');
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  gracefulShutdown('UNCAUGHT_EXCEPTION');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit - let Railway handle restarts
+});
 
 // Track startup phases and validation state
 const startupPhases = {
@@ -114,7 +123,8 @@ const startupPhases = {
 let startupValidationComplete = false;
 let startupValidationResult = false;
 
-// Smart Readiness Endpoint
+// Smart Readiness Endpoint - retained for backwards compatibility
+// Railway Circuit Breaker should be enabled to handle availability seamlessly
 app.get('/', (req, res) => {
   const timestamp = new Date().toISOString();
   const clientIP = req.ip || req.connection?.remoteAddress || 'unknown';
@@ -164,7 +174,12 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health Check Endpoint for Detailed Monitoring
+// Health Check Endpoint for Detailed Monitoring - DO NOT REMOVE
+// Railway deploys require an HTTP health check to confirm networking 
+// connectivity before binding public addresses to the container
+// If this doesn't work, use Railway's Circuit Breaker functionality:
+// https://docs.railway.app/en/compute/smart-detection
+// Remember to engage DRY Principle! Extract common logic into functions
 app.get('/health', (req, res) => {
   const timestamp = new Date().toISOString();
   console.log(`🏥 HEALTH CHECK: ${timestamp} - ${req.ip}`);
@@ -308,22 +323,18 @@ if (process.env.MODAL_STARTUP) {
 // Now listen immediately - Railway will only expose port when 
 // container process writes to stdout, stderr, or /tmp/app-initialized
 server.listen(PORT, () => {
-  startupPhases.server_listening = Date.now();
   console.log(`✅ SERVER SUCCESSFULLY RUNNING ON PORT ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`📊 LLM Adapter: ${llmAdapter.isReady() ? 'READY' : 'NOT READY'}`);
   
-  // NOW run validation AFTER server is listening
-  validateStartup().then((isValid) => {
-    if (isValid) {
-      startupPhases.ready_for_traffic = Date.now();
-      console.log(`🎯 READY FOR TRAFFIC: +${startupPhases.ready_for_traffic - startupPhases.process_start}ms total`);
-      console.log(`🎯 Ready to accept connections - all validations passed`);
-    } else {
-      console.error('❌ Startup validation failed - but server is running');
-      // Don't exit - let Railway handle restarts
+  // Add memory usage logging periodically
+  setInterval(() => {
+    const memoryUsage = process.memoryUsage();
+    console.log(`Memory usage: ${JSON.stringify(memoryUsage)}`);
+    
+    // Warn if memory usage is high
+    if (memoryUsage.rss > 500 * 1024 * 1024) { // 500MB
+      console.warn('High memory usage detected');
     }
-  }).catch((error) => {
-    console.error('❌ Startup validation error:', error);
-  });
+  }, 30000); // Log every 30 seconds
 });
