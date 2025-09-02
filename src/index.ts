@@ -26,30 +26,47 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+  } else if (process.env.NODE_ENV === 'development') {
+    // Allow all origins in development
+    res.setHeader('Access-Control-Allow-Origin', '*');
   }
   
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
   
+  // Handle preflight requests
   if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
+    res.status(200).end();
     return;
   }
   
   next();
 });
 
-// Initialize Socket.IO with proper CORS for Vercel
+// Initialize Socket.IO with comprehensive CORS configuration
 const io = new Server(server, {
   cors: {
     origin: process.env.FRONTEND_URL ? 
       process.env.FRONTEND_URL.split(',').map(url => url.trim()) : 
       ["http://localhost:3000", "https://klk-front.vercel.app"],
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true
   },
   transports: ['websocket', 'polling']
+});
+
+// Add debug logging for CORS troubleshooting
+app.use((req, res, next) => {
+  console.log('=== CORS Debug Info ===');
+  console.log('Request Origin:', req.headers.origin);
+  console.log('Allowed Origins:', process.env.FRONTEND_URL);
+  console.log('Request Method:', req.method);
+  console.log('Request Path:', req.path);
+  console.log('========================');
+  next();
 });
 
 // Routes
