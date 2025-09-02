@@ -1,0 +1,29 @@
+[
+  {
+    "id": "mex",
+    "country_key": "mex",
+    "displayName": "México",
+    "locale_hint": "Español mexicano",
+    "safe_reviewed": true,
+    "created_by": "system",
+    "created_at": "2025-08-29T20:55:00.000Z"
+  },
+  {
+    "id": "arg",
+    "country_key": "arg",
+    "displayName": "Argentina",
+    "locale_hint": "Español argentino",
+    "safe_reviewed": true,
+    "created_by": "system",
+    "created_at": "2025-08-29T20:55:00.000Z"
+  },
+  {
+    "id": "esp",
+    "country_key": "esp",
+    "displayName": "España",
+    "locale_hint": "Español peninsular",
+    "safe_reviewed": true,
+    "created_by": "system",
+    "created_at": "2025-08-29T20:55:00.000Z"
+  }
+]
