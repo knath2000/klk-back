@@ -17,18 +17,40 @@ import { personaService } from './services/personaService';
 const app = express();
 const server = createServer(app);
 
-// Initialize Socket.IO
-const io = new Server(server, {
-  cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
-    methods: ["GET", "POST"]
-  },
-  // Railway WebSocket support
-  transports: ['websocket', 'polling']
+// Add comprehensive CORS headers
+app.use((req, res, next) => {
+  const allowedOrigins = process.env.FRONTEND_URL ? 
+    process.env.FRONTEND_URL.split(',').map(url => url.trim()) : 
+    ["http://localhost:3000", "https://klk-front.vercel.app"];
+  
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+    return;
+  }
+  
+  next();
 });
 
-// Create a Socket.IO namespace with CORS options
-const dialogNamespace = io.of('/dialogs');
+// Initialize Socket.IO with proper CORS for Vercel
+const io = new Server(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL ? 
+      process.env.FRONTEND_URL.split(',').map(url => url.trim()) : 
+      ["http://localhost:3000", "https://klk-front.vercel.app"],
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling']
+});
 
 // Routes
 app.use('/api/personas', personasRouter);
