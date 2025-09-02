@@ -4,6 +4,21 @@ import { PersonasResponse, ErrorResponse } from '../types';
 
 const router = Router();
 
+// Add CORS headers to all persona routes
+router.use((req, res, next) => {
+  const allowedOrigins = process.env.FRONTEND_URL ? 
+    process.env.FRONTEND_URL.split(',').map(url => url.trim()) : 
+    ["http://localhost:3000", "https://klk-front.vercel.app"];
+  
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+  
+  next();
+});
+
 /**
  * GET /api/personas
  * Returns the list of available personas for the client
@@ -11,38 +26,15 @@ const router = Router();
 router.get('/', (req: Request, res: Response<PersonasResponse | ErrorResponse>) => {
   try {
     const personas = personaService.getAllPersonas();
-
+    
+    // Add CORS headers to response
+    res.setHeader('Content-Type', 'application/json');
+    
     res.json({
       personas
     });
   } catch (error) {
     console.error('Error fetching personas:', error);
-    res.status(500).json({
-      error: 'Internal server error',
-      code: 'INTERNAL_ERROR'
-    });
-  }
-});
-
-/**
- * GET /api/personas/:id
- * Returns a specific persona by ID
- */
-router.get('/:id', (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const persona = personaService.getPersona(id);
-
-    if (!persona) {
-      return res.status(404).json({
-        error: 'Persona not found',
-        code: 'PERSONA_NOT_FOUND'
-      });
-    }
-
-    res.json({ persona });
-  } catch (error) {
-    console.error('Error fetching persona:', error);
     res.status(500).json({
       error: 'Internal server error',
       code: 'INTERNAL_ERROR'
