@@ -4,7 +4,7 @@ import { PersonasResponse, ErrorResponse } from '../types';
 
 const router = Router();
 
-// Add CORS headers to all persona routes
+// Add CORS headerss to all persona routes
 router.use((req, res, next) => {
   const allowedOrigins = process.env.FRONTEND_URL ? 
     process.env.FRONTEND_URL.split(',').map(url => url.trim()) : 
