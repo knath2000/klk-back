@@ -45,7 +45,7 @@ export class ChatService {
     // Check for engagement indicators (questions, conversation starters)
     const hasQuestion = /[¿?]\s*[A-Za-zÀ-ÿ]/.test(response);
     const hasEngagement = /\b(qué|como|cuándo|dónde|por qué|cuál|quién)\b/i.test(response);
-    const hasSlang = /\b(güey|chido|órale|qué onda|no manches|chamba|qué padre|manito|guey)\b/i.test(response);
+    const hasSlang = /\b(güey|chido|órale|qué onda|no manches|chamba|qué padre|manito|guey|papá|bebe|chulo|qué lo qué|tremendo|vaina|chévere|guagua)\b/i.test(response);
 
     if (hasQuestion || hasEngagement) {
       score += 2;
@@ -75,22 +75,22 @@ export class ChatService {
   }
 
   // Conversation context awareness
-  private enhanceWithContextAwareness(response: string, userMessage: string): string {
+  private enhanceWithContextAwareness(response: string, userMessage: string, selected_country_key: string): string {
     // Add follow-up engagement if response lacks questions
     const hasQuestion = /[¿?]\s*[A-Za-zÀ-ÿ]/.test(response);
     const hasEngagement = /\b(qué|como|cuándo|dónde|por qué|cuál|quién)\b/i.test(response);
 
     if (!hasQuestion && !hasEngagement && response.length > 20) {
-      // Add contextual follow-up based on user message
-      const followUps = [
-        " ¿Qué más quieres saber?",
-        " ¿Te cuento más al respecto?",
-        " ¿Qué opinas tú?",
-        " ¿Quieres que te explique mejor?",
-        " ¿Hay algo más que te interese?"
-      ];
+      // Add contextual follow-up based on user message and country
+      const followUps = {
+        mex: [" ¿Qué más quieres saber?", " ¿Te cuento más al respecto?", " ¿Qué opinas tú?", " ¿Quieres que te explique mejor?", " ¿Hay algo más que te interese?"],
+        arg: [" ¿Qué más querés saber?", " ¿Te cuento más al respecto?", " ¿Qué opinás vos?", " ¿Querés que te explique mejor?", " ¿Hay algo más que te interese?"],
+        esp: [" ¿Qué más quieres saber?", " ¿Te cuento más al respecto?", " ¿Qué opinas tú?", " ¿Quieres que te explique mejor?", " ¿Hay algo más que te interese?"],
+        dom: [" ¿Qué lo qué quieres saber?", " ¿Te cuento más al respecto?", " ¿Qué opinas tú?", " ¿Quieres que te explique mejor?", " ¿Hay algo más que te interese?"]
+      };
 
-      const randomFollowUp = followUps[Math.floor(Math.random() * followUps.length)];
+      const countryFollowUps = followUps[selected_country_key as keyof typeof followUps] || followUps.mex;
+      const randomFollowUp = countryFollowUps[Math.floor(Math.random() * countryFollowUps.length)];
       return response.trim() + randomFollowUp;
     }
 
@@ -173,6 +173,7 @@ export class ChatService {
       let isFirstChunk = true;
       let retryCount = 0;
       const maxRetries = 2;
+      let hasRetried = false; // Track if we've already retried to prevent duplicate calls
 
       try {
         for await (const chunk of this.llmAdapter.streamCompletion(messages, options)) {
@@ -191,7 +192,7 @@ export class ChatService {
             this.logResponseProcess(message_id, 'validation', validation);
 
             // If response is poor quality and we haven't exceeded retries, try again
-            if (!validation.isValid && retryCount < maxRetries) {
+            if (!validation.isValid && retryCount < maxRetries && !hasRetried) {
               console.warn(`⚠️ POOR RESPONSE QUALITY for ${message_id}, attempting retry ${retryCount + 1}`);
               this.logResponseProcess(message_id, 'retry_attempt', { 
                 attempt: retryCount + 1, 
@@ -199,14 +200,15 @@ export class ChatService {
               });
               
               retryCount++;
+              hasRetried = true; // Prevent multiple retries
               
-              // Retry with enhanced prompt
+              // Retry with enhanced prompt using the same persona
               const retryMessages: LLMMessage[] = [
-                systemMessage,
+                systemMessage, // This already contains the correct persona
                 userMessage,
                 {
                   role: 'user',
-                  content: `Por favor, dame una respuesta más completa y amigable en español mexicano usando jerga como "güey", "chido", "órale". Responde de manera natural y pregunta algo para continuar la conversación. Mensaje original: "${message}"`
+                  content: `Por favor, mejora esta respuesta usando el estilo y jerga del país seleccionado. Responde de manera natural y pregunta algo para continuar la conversación. Mensaje original: "${message}"`
                 }
               ];
 
@@ -243,7 +245,8 @@ export class ChatService {
               const fallbacks = {
                 mex: "¡Órale güey! Estoy aquí para platicar contigo. ¿Qué más quieres saber?",
                 arg: "¡Che! Estoy acá para charlar. ¿Qué te gustaría conversar?",
-                esp: "¡Oye! Estoy aquí para hablar contigo. ¿Qué te apetece comentar?"
+                esp: "¡Oye! Estoy aquí para hablar contigo. ¿Qué te apetece comentar?",
+                dom: "¡Papá! Estoy aquí para conversar contigo. ¿Qué lo qué quieres platicar?"
               };
               
               finalResponse = fallbacks[selected_country_key as keyof typeof fallbacks] || 
@@ -251,7 +254,7 @@ export class ChatService {
             }
 
             // Add conversation context awareness
-            finalResponse = this.enhanceWithContextAwareness(finalResponse, message);
+            finalResponse = this.enhanceWithContextAwareness(finalResponse, message, selected_country_key);
             
             // Send final message
             const finalPayload: AssistantFinalPayload = {
@@ -303,7 +306,15 @@ export class ChatService {
         socket.emit('typing_end', typingPayload);
 
         // Provide fallback response instead of just error
-        const fallbackResponse = "¡Órale! Parece que tuve un problemita técnico. ¿Me puedes repetir eso o quieres platicar de otra cosa?";
+        const fallbacks = {
+          mex: "¡Órale! Parece que tuve un problemita técnico. ¿Me puedes repetir eso o quieres platicar de otra cosa?",
+          arg: "¡Che! Tuve un problema técnico. ¿Me podés repetir eso o querés cambiar de tema?",
+          esp: "¡Oye! Tuve un problema técnico. ¿Me puedes repetir eso o quieres cambiar de tema?",
+          dom: "¡Papá! Tuve un problemita técnico. ¿Me puedes repetir eso o quieres platicar de otra cosa?"
+        };
+        
+        const fallbackResponse = fallbacks[selected_country_key as keyof typeof fallbacks] || 
+                               "¡Ey! Tuve un problema técnico. ¿Me puedes decir eso de nuevo o quieres cambiar de tema?";
         
         const fallbackPayload: AssistantFinalPayload = {
           message_id,
@@ -330,7 +341,15 @@ export class ChatService {
       socket.emit('typing_end', typingPayload);
       
       // Provide fallback response for any service error
-      const fallbackResponse = "¡Ey! Tuve un problema técnico. ¿Me puedes decir eso de nuevo o quieres cambiar de tema?";
+      const fallbacks = {
+        mex: "¡Ey! Tuve un problema técnico. ¿Me puedes decir eso de nuevo o quieres cambiar de tema?",
+        arg: "¡Che! Tuve un problema técnico. ¿Me podés decir eso de nuevo o querés cambiar de tema?",
+        esp: "¡Oye! Tuve un problema técnico. ¿Me puedes decir eso de nuevo o quieres cambiar de tema?",
+        dom: "¡Papá! Tuve un problema técnico. ¿Me puedes decir eso de nuevo o quieres cambiar de tema?"
+      };
+      
+      const fallbackResponse = fallbacks[selected_country_key as keyof typeof fallbacks] || 
+                             "¡Ey! Tuve un problema técnico. ¿Me puedes decir eso de nuevo o quieres cambiar de tema?";
       
       const fallbackPayload: AssistantFinalPayload = {
         message_id,
