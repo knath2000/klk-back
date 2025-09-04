@@ -12,26 +12,38 @@ class PersonaService {
 
   private loadPersonas(): void {
     try {
-      // Load manifest
-      const manifestPath = path.join(__dirname, '../../personas/manifest.json');
+      // Use process.cwd() for more reliable path resolution in containers
+      const basePath = process.cwd();
+      const manifestPath = path.join(basePath, 'server', 'personas', 'manifest.json');
+      
+      console.log('🔍 Looking for manifest at:', manifestPath);
+      console.log('📂 Current working directory:', basePath);
+      console.log('📂 Files in personas directory:', fs.readdirSync(path.join(basePath, 'server', 'personas')));
+      
       const manifestData = fs.readFileSync(manifestPath, 'utf-8');
       this.manifest = JSON.parse(manifestData);
-
+      
       // Load individual persona files
       for (const personaMeta of this.manifest) {
         if (personaMeta.safe_reviewed) {
-          const personaPath = path.join(__dirname, '../../personas', `${personaMeta.id}.json`);
+          const personaPath = path.join(basePath, 'server', 'personas', `${personaMeta.id}.json`);
+          console.log('🔍 Looking for persona file:', personaPath);
+          
           if (fs.existsSync(personaPath)) {
             const personaData = fs.readFileSync(personaPath, 'utf-8');
             const persona: Persona = JSON.parse(personaData);
             this.personas.set(persona.country_key, persona);
+            console.log('✅ Loaded persona:', persona.country_key);
+          } else {
+            console.error('❌ Persona file not found:', personaPath);
           }
         }
       }
-
-      console.log(`Loaded ${this.personas.size} personas`);
+      
+      console.log(`📚 Loaded ${this.personas.size} personas successfully`);
     } catch (error) {
-      console.error('Error loading personas:', error);
+      console.error('💥 Error loading personas:', error);
+      console.error('_STACK:', error instanceof Error ? error.stack : String(error));
     }
   }
 
