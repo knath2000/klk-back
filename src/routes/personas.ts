@@ -3,28 +3,56 @@ import { personaService } from '../services/personaService';
 import { feedbackService } from '../services/feedbackService';
 import { ChatService } from '../services/chatService';
 import { PersonasResponse, ErrorResponse, FeedbackData, FeedbackResponse, DebugTestRequest, DebugTestResponse, FeedbackStats } from '../types';
+import fs from 'fs';
+import path from 'path';
 
 const router = Router();
 
 /**
  * GET /api/personas
- * Returnss the list of available personas for the client
+ * Returns the list of available personas for the client
  */
 router.get('/', (req: Request, res: Response<PersonasResponse | ErrorResponse>) => {
   try {
-    const personas = personaService.getAllPersonas();
+    console.log('=== PERSONAS API DEBUG INFO ===');
+    console.log('Request Origin:', req.headers.origin);
+    console.log('Request Headers:', req.headers);
+    console.log('Current Working Directory:', process.cwd());
+    console.log('Directory contents:', fs.readdirSync(process.cwd()));
     
-    // Add CORS headers to response
+    // Try to find personas directory
+    const possiblePaths = [
+      path.join(process.cwd(), 'personas'),
+      path.join(process.cwd(), 'server', 'personas'),
+      path.join(__dirname, '../../personas')
+    ];
+    
+    console.log('🔍 Checking possible personas paths:');
+    for (const personaPath of possiblePaths) {
+      console.log('   Path:', personaPath, 'Exists:', fs.existsSync(personaPath));
+      if (fs.existsSync(personaPath)) {
+        console.log('   Files in directory:', fs.readdirSync(personaPath));
+      }
+    }
+    
+    const personas = personaService.getAllPersonas();
+    console.log('Personas loaded by service:', personas.length);
+    console.log('Personas data:', JSON.stringify(personas, null, 2));
+    
     res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Access-Control-Allow-Origin', '*');
     
     res.json({
       personas
     });
+    
+    console.log('✅ Personas API response sent successfully');
   } catch (error) {
-    console.error('Error fetching personas:', error);
+    console.error('💥 Error in personas API:', error);
     res.status(500).json({
       error: 'Internal server error',
-      code: 'INTERNAL_ERROR'
+      code: 'INTERNAL_ERROR',
+      details: error instanceof Error ? error.message : String(error)
     });
   }
 });
