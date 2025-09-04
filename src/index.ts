@@ -310,10 +310,12 @@ io.on('connection', (socket) => {
   
   // Handle user messages
   socket.on('user_message', async (payload) => {
+    console.log('📨 RECEIVED user_message:', payload);
     try {
       await chatService.handleUserMessage(socket, payload);
+      console.log('✅ PROCESSED user_message successfully');
     } catch (error) {
-      console.error('Error handling user message:', error);
+      console.error('❌ ERROR handling user message:', error);
       socket.emit('error', {
         message: 'Failed to process message',
         code: 'PROCESSING_ERROR'
@@ -364,10 +366,15 @@ if (process.env.MODAL_STARTUP) {
 
 // Now listen immediately - Railway will only expose port when 
 // container process writes to stdout, stderr, or /tmp/app-initialized
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`✅ SERVER SUCCESSFULLY RUNNING ON PORT ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`📊 LLM Adapter: ${llmAdapter.isReady() ? 'READY' : 'NOT READY'}`);
+  
+  // Run startup validation
+  console.log('🔧 Running startup validation...');
+  const validationResult = await validateStartup();
+  console.log(`🔧 Startup validation result: ${validationResult ? 'PASS' : 'FAIL'}`);
   
   // Add memory usage logging periodically
   setInterval(() => {

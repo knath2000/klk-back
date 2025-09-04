@@ -26,9 +26,12 @@ export class ChatService {
   ): Promise<void> {
     const { message, selected_country_key, client_ts, message_id } = payload;
 
+    console.log(`🤖 PROCESSING MESSAGE: ${message_id} - "${message}" for country: ${selected_country_key}`);
+    
     try {
       // Validate country key
       if (!personaService.isValidCountryKey(selected_country_key)) {
+        console.error(`❌ INVALID COUNTRY KEY: ${selected_country_key}`);
         socket.emit('error', {
           message: 'Invalid country selection',
           code: 'INVALID_COUNTRY'
@@ -39,6 +42,7 @@ export class ChatService {
       // Get persona
       const persona = personaService.getPersona(selected_country_key);
       if (!persona) {
+        console.error(`❌ PERSONA NOT FOUND: ${selected_country_key}`);
         socket.emit('error', {
           message: 'Persona not found',
           code: 'PERSONA_NOT_FOUND'
@@ -46,6 +50,8 @@ export class ChatService {
         return;
       }
 
+      console.log(`✅ USING PERSONA: ${persona.displayName} (${persona.country_key})`);
+      
       // Start typing indicator
       const typingPayload: TypingPayload = {
         country_key: selected_country_key,
@@ -66,6 +72,8 @@ export class ChatService {
 
       const messages: LLMMessage[] = [systemMessage, userMessage];
 
+      console.log(`🚀 CALLING LLM: ${messages.length} messages`);
+      
       // Stream LLM response
       const options = {
         model: process.env.LANGDB_MODEL || 'gemini-2.5-flash-lite',
@@ -79,6 +87,7 @@ export class ChatService {
       try {
         for await (const chunk of this.llmAdapter.streamCompletion(messages, options)) {
           if (chunk.isFinal) {
+            console.log(`✅ LLM RESPONSE COMPLETE: ${message_id} (${fullResponse.length} chars)`);
             // Send final message
             const finalPayload: AssistantFinalPayload = {
               message_id,
@@ -106,13 +115,14 @@ export class ChatService {
 
             // Stop typing indicator after first chunk
             if (isFirstChunk) {
+              console.log(`📝 STARTING STREAM: ${message_id}`);
               socket.emit('typing_end', typingPayload);
               isFirstChunk = false;
             }
           }
         }
       } catch (error) {
-        console.error('Streaming error:', error);
+        console.error(`❌ LLM STREAMING ERROR for ${message_id}:`, error);
 
         // Stop typing indicator
         socket.emit('typing_end', typingPayload);
@@ -125,7 +135,7 @@ export class ChatService {
         });
       }
     } catch (error) {
-      console.error('Chat service error:', error);
+      console.error(`❌ CHAT SERVICE ERROR for ${message_id}:`, error);
       socket.emit('error', {
         message: 'Internal server error',
         code: 'INTERNAL_ERROR'
