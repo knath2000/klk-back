@@ -24,16 +24,19 @@ app.use((req, res, next) => {
     ["http://localhost:3000", "https://klk-front.vercel.app"];
   
   const origin = req.headers.origin;
+  
+  // Always set CORS headers for allowed origins
   if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
-  } else if (process.env.NODE_ENV === 'development') {
-    // Allow all origins in development
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  } else if (!origin || process.env.NODE_ENV === 'development') {
+    // Allow all origins in development or for requests without origin
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
   
+  // Set common CORS headers
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
   res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
   
   // Handle preflight requests
