@@ -4,6 +4,8 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Load environment variables
 dotenv.config();
@@ -91,6 +93,56 @@ app.get('/ready', (req, res) => {
     timestamp: new Date().toISOString(),
     connections: io ? io.engine.clientsCount : 0
   });
+});
+
+// Enhanced health check with detailed diagnostics
+app.get('/health', (req, res) => {
+  const timestamp = new Date().toISOString();
+  console.log(`🏥 HEALTH CHECK: ${timestamp} - ${req.ip}`);
+  
+  try {
+    const personas = personaService.getAllPersonas();
+    const personaCount = personas.length;
+    const isHealthy = personaCount > 0;
+    
+    const healthStatus = {
+      server: 'ok',
+      timestamp,
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      personas: {
+        count: personaCount,
+        loaded: personaCount > 0,
+        details: personas.map(p => ({
+          id: p.id,
+          country_key: p.country_key,
+          displayName: p.displayName,
+          safe_reviewed: p.safe_reviewed
+        }))
+      },
+      environment: {
+        NODE_ENV: process.env.NODE_ENV,
+        PORT: process.env.PORT,
+        CWD: process.cwd(),
+        __dirname: __dirname
+      },
+      fileSystem: {
+        cwdContents: fs.existsSync(process.cwd()) ? fs.readdirSync(process.cwd()) : 'CWD not accessible',
+        personasDir: fs.existsSync(path.join(process.cwd(), 'personas')) ? 
+                   fs.readdirSync(path.join(process.cwd(), 'personas')) : 
+                   'Personas directory not found'
+      }
+    };
+    
+    res.status(isHealthy ? 200 : 503).json(healthStatus);
+  } catch (error) {
+    console.error('❌ Health check error:', error);
+    res.status(500).json({
+      server: 'error',
+      error: error instanceof Error ? error.message : String(error),
+      timestamp
+    });
+  }
 });
 
 // Add these signal handlers BEFORE the server.listen() call
@@ -214,37 +266,6 @@ app.get('/', (req, res) => {
     memory: process.memoryUsage(),
     version: process.version
   });
-});
-
-// Health Check Endpoint for Detailed Monitoring - DO NOT REMOVE
-// Railway deploys require an HTTP health check to confirm networking 
-// connectivity before binding public addresses to the container
-// If this doesn't work, use Railway's Circuit Breaker functionality:
-// https://docs.railway.app/en/compute/smart-detection
-// Remember to engage DRY Principle! Extract common logic into functions
-app.get('/health', (req, res) => {
-  const timestamp = new Date().toISOString();
-  console.log(`🏥 HEALTH CHECK: ${timestamp} - ${req.ip}`);
-  
-  const healthStatus = {
-    server: 'ok',
-    startup_validation: {
-      complete: startupValidationComplete,
-      result: startupValidationResult
-    },
-    personas: personaService.getAllPersonas().length,
-    llm_adapter: llmAdapter.isReady(),
-    websocket: io ? 'ok' : 'error',
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    timestamp
-  };
-  
-  const isHealthy = healthStatus.startup_validation.complete && 
-                    healthStatus.startup_validation.result &&
-                    healthStatus.personas > 0;
-  
-  res.status(isHealthy ? 200 : 503).json(healthStatus);
 });
 
 // Enhanced Startup Validation Function

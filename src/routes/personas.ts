@@ -12,47 +12,75 @@ const router = Router();
  * GET /api/personas
  * Returns the list of available personas for the client
  */
-router.get('/', (req: Request, res: Response<PersonasResponse | ErrorResponse>) => {
+router.get('/', (req: Request, res: Response) => {
   try {
-    console.log('=== PERSONAS API DEBUG INFO ===');
-    console.log('Request Origin:', req.headers.origin);
-    console.log('Request Headers:', req.headers);
-    console.log('Current Working Directory:', process.cwd());
-    console.log('Directory contents:', fs.readdirSync(process.cwd()));
+    console.log('=== PERSONAS API REQUEST ===');
+    console.log('   Timestamp:', new Date().toISOString());
+    console.log('   Request Origin:', req.headers.origin);
+    console.log('   User Agent:', req.headers['user-agent']);
+    console.log('   Process CWD:', process.cwd());
     
-    // Try to find personas directory
-    const possiblePaths = [
-      path.join(process.cwd(), 'personas'),
-      path.join(process.cwd(), 'server', 'personas'),
-      path.join(__dirname, '../../personas')
-    ];
-    
-    console.log('🔍 Checking possible personas paths:');
-    for (const personaPath of possiblePaths) {
-      console.log('   Path:', personaPath, 'Exists:', fs.existsSync(personaPath));
-      if (fs.existsSync(personaPath)) {
-        console.log('   Files in directory:', fs.readdirSync(personaPath));
+    // Debug file system structure
+    try {
+      console.log('📂 Current directory:', process.cwd());
+      console.log('📂 Directory contents:', fs.readdirSync(process.cwd()));
+      
+      if (fs.existsSync(path.join(process.cwd(), 'personas'))) {
+        console.log('📂 Personas directory contents:', fs.readdirSync(path.join(process.cwd(), 'personas')));
+      } else {
+        console.log('❌ Personas directory not found in current path');
+        
+        // Try to find personas directory
+        const searchPaths = [
+          path.join(process.cwd(), 'personas'),
+          path.join(process.cwd(), 'server', 'personas'),
+          '/app/personas',
+          path.join(__dirname, '../../personas')
+        ];
+        
+        for (const searchPath of searchPaths) {
+          if (fs.existsSync(searchPath)) {
+            console.log('✅ Found personas at:', searchPath);
+            console.log('📂 Personas contents:', fs.readdirSync(searchPath));
+            break;
+          }
+        }
       }
+    } catch (fsError) {
+      console.error('❌ File system error:', fsError);
     }
     
+    // Get personas from service
     const personas = personaService.getAllPersonas();
-    console.log('Personas loaded by service:', personas.length);
-    console.log('Personas data:', JSON.stringify(personas, null, 2));
+    console.log('📊 Personas from service:', personas.length);
     
+    if (personas.length === 0) {
+      console.log('⚠️  No personas found - checking service internals');
+      // Try to reload personas
+      console.log('🔄 Attempting to reload personas...');
+      personaService.reloadPersonas();
+      const reloadedPersonas = personaService.getAllPersonas();
+      console.log('📊 Personas after reload:', reloadedPersonas.length);
+    }
+    
+    // Add CORS headers
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
     res.json({
-      personas
+      personas: personaService.getAllPersonas()
     });
     
-    console.log('✅ Personas API response sent successfully');
+    console.log('✅ Personas API response sent successfully with', personaService.getAllPersonas().length, 'personas');
   } catch (error) {
     console.error('💥 Error in personas API:', error);
     res.status(500).json({
       error: 'Internal server error',
       code: 'INTERNAL_ERROR',
-      details: error instanceof Error ? error.message : String(error)
+      details: error instanceof Error ? error.message : String(error),
+      timestamp: new Date().toISOString()
     });
   }
 });

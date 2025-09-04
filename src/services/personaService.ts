@@ -12,34 +12,74 @@ class PersonaService {
 
   private loadPersonas(): void {
     try {
-      // Use __dirname for more reliable path resolution in containers
-      const currentDir = __dirname;
-      const serverDir = path.dirname(currentDir); // Go up one level from src/services to server/
-      const personasDir = path.join(serverDir, 'personas');
+      // More robust path resolution for container environments
+      const basePath = process.cwd();
+      const personasDir = path.join(basePath, 'personas');
       
       console.log('🔍 PersonaService Path Resolution:');
-      console.log('   __dirname:', currentDir);
-      console.log('   Server directory:', serverDir);
-      console.log('   Personas directory:', personasDir);
+      console.log('   Process CWD:', basePath);
+      console.log('   Personas directory path:', personasDir);
       
       // Check if personas directory exists
       if (!fs.existsSync(personasDir)) {
-        console.error('❌ Personas directory not found:', personasDir);
-        console.error('   Available directories in server:', fs.readdirSync(serverDir));
+        console.error('❌ Personas directory not found at:', personasDir);
+        
+        // Try alternative paths commonly used in containers
+        const alternativePaths = [
+          path.join(basePath, 'server', 'personas'),
+          path.join(basePath, '..', 'server', 'personas'),
+          path.join('/app', 'personas'),
+          path.join(__dirname, '..', '..', 'personas')
+        ];
+        
+        console.log('🔍 Trying alternative paths:');
+        for (const altPath of alternativePaths) {
+          console.log('   Checking:', altPath, 'Exists:', fs.existsSync(altPath));
+          if (fs.existsSync(altPath)) {
+            console.log('✅ Found personas directory at alternative path:', altPath);
+            this.loadPersonasFromDirectory(altPath);
+            return;
+          }
+        }
+        
+        // List what's actually in the current directory
+        try {
+          console.log('📂 Current directory contents:', fs.readdirSync(basePath));
+          if (fs.existsSync(path.join(basePath, 'server'))) {
+            console.log('📂 Server directory contents:', fs.readdirSync(path.join(basePath, 'server')));
+          }
+        } catch (listError) {
+          console.error('❌ Error listing directory contents:', listError);
+        }
+        
         return;
       }
+      
+      // Load personas from found directory
+      this.loadPersonasFromDirectory(personasDir);
+      
+    } catch (error) {
+      console.error('💥 Error in loadPersonas:', error);
+      console.error('_STACK:', error instanceof Error ? error.stack : String(error));
+    }
+  }
+
+  private loadPersonasFromDirectory(personasDir: string): void {
+    try {
+      console.log('📂 Loading personas from directory:', personasDir);
       
       const manifestPath = path.join(personasDir, 'manifest.json');
       console.log('🔍 Looking for manifest at:', manifestPath);
       
       if (!fs.existsSync(manifestPath)) {
         console.error('❌ Manifest file not found:', manifestPath);
-        console.error('   Available files in personas:', fs.readdirSync(personasDir));
+        console.log('📂 Files in personas directory:', fs.readdirSync(personasDir));
         return;
       }
       
       const manifestData = fs.readFileSync(manifestPath, 'utf-8');
       this.manifest = JSON.parse(manifestData);
+      console.log('📚 Manifest loaded with', this.manifest.length, 'entries');
       
       // Load individual persona files
       for (const personaMeta of this.manifest) {
@@ -51,17 +91,17 @@ class PersonaService {
             const personaData = fs.readFileSync(personaPath, 'utf-8');
             const persona: Persona = JSON.parse(personaData);
             this.personas.set(persona.country_key, persona);
-            console.log('✅ Loaded persona:', persona.country_key);
+            console.log('✅ Loaded persona:', persona.country_key, '-', persona.displayName);
           } else {
             console.error('❌ Persona file not found:', personaPath);
+            console.log('📂 Available files:', fs.readdirSync(personasDir));
           }
         }
       }
       
-      console.log(`📚 Loaded ${this.personas.size} personas successfully`);
+      console.log(`📚 Successfully loaded ${this.personas.size} personas`);
     } catch (error) {
-      console.error('💥 Error loading personas:', error);
-      console.error('_STACK:', error instanceof Error ? error.stack : String(error));
+      console.error('💥 Error loading personas from directory:', error);
     }
   }
 

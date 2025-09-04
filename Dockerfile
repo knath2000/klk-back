@@ -3,13 +3,13 @@ FROM node:18-alpine
 WORKDIR /app
 
 # Copy all package files
-COPY package*.json ./
+COPY server/package*.json ./
 
 # Install dependencies
 RUN npm ci --only=production
 
-# Copy source code
-COPY . .
+# Copy source code - IMPORTANT: Copy server directory structure correctly
+COPY server/ .
 
 # Build TypeScript
 RUN npm run build
@@ -24,3 +24,4 @@ EXPOSE 3001
 
 # Use exec form to ensure proper signal handling
 CMD ["node", "dist/index.js"]
+
