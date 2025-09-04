@@ -4,6 +4,7 @@ declare class PersonaService {
     private manifest;
     constructor();
     private loadPersonas;
+    private loadPersonasFromDirectory;
     getPersona(countryKey: string): Persona | null;
     getAllPersonas(): Persona[];
     getManifest(): Persona[];

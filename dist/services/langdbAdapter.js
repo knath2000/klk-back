@@ -18,7 +18,7 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             const timeoutId = setTimeout(() => {
                 console.warn(`Request ${requestId} timed out, aborting...`);
                 controller.abort();
-            }, options.timeout || 60000);
+            }, options.timeout || 30000); // Use same default as chat service
             // Use native fetch (Node.js 18+)
             response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
@@ -71,9 +71,9 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
                             try {
                                 const parsed = JSON.parse(data);
                                 const delta = parsed.choices?.[0]?.delta;
-                                if (delta?.content) {
+                                if (delta?.content !== undefined) {
                                     yield {
-                                        deltaText: delta.content,
+                                        deltaText: delta.content || '', // Send empty string instead of skipping
                                         isFinal: false,
                                         meta: {
                                             usage: parsed.usage,
