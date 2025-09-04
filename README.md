@@ -45,78 +45,175 @@ ENABLE_STREAMING=true
 npm run dev
 ```
 
+## Recent Fixes (September 2025)
+
+### Critical Chat Functionality Fixes
+
+**1. WebSocket Event Mismatch Fixed**
+- **Issue**: Frontend was emitting `'message'` event but backend expected `'user_message'`
+- **Fix**: Updated frontend to emit `'user_message'` event directly with data payload
+- **Result**: WebSocket connections now remain stable during message sending
+
+**2. Missing Startup Validation**
+- **Issue**: `validateStartup()` function was defined but never called
+- **Fix**: Added startup validation call in server initialization
+- **Result**: Server now validates all dependencies on startup
+
+**3. Enhanced Debugging**
+- **Frontend**: Added comprehensive logging for message sending and response handling
+- **Backend**: Added detailed logging for message processing and LLM responses
+- **Result**: Improved troubleshooting and monitoring capabilities
+
+## Quick Start
+
+### Prerequisites
+- Node.js 18+
+- Railway account (for backend deployment)
+- Vercel account (for frontend deployment)
+- LangDB API key and gateway URL
+
+### Environment Setup
+
+1. **Railway Backend Environment Variables**:
+```env
+FRONTEND_URL=https://your-vercel-app.vercel.app,http://localhost:3000
+PORT=3001
+NODE_ENV=production
+LANGDB_API_KEY=your_langdb_api_key
+LANGDB_GATEWAY_URL=https://your-langdb-gateway-url/v1
+LANGDB_MODEL=anthropic/claude-sonnet-4
+ENABLE_STREAMING=true
+REQUEST_TIMEOUT=30000
+```
+
+2. **Vercel Frontend Environment Variables**:
+```env
+NEXT_PUBLIC_BACKEND_URL=https://your-railway-app.railway.app
+```
+
+### Deployment Steps
+
+1. **Deploy Backend to Railway**:
+```bash
+cd server
+npm install
+npm run build
+railway deploy
+```
+
+2. **Deploy Frontend to Vercel**:
+```bash
+cd klkfront
+npm install
+npm run build
+vercel --prod
+```
+
+3. **Test Deployment**:
+```bash
+# Run the test script
+./test_chat.sh
+```
+
+## Testing the Chat Feature
+
+### Automated Testing
+Run the comprehensive test script:
+```bash
+./test_chat.sh
+```
+
+This will test:
+- Backend health endpoint
+- Personas API
+- WebSocket connectivity
+- Frontend accessibility
+
+### Manual Testing
+1. Open your Vercel frontend URL
+2. Select a country (Mexico, Argentina, or Spain)
+3. Send a message like "Hola, ¿cómo estás?"
+4. Verify you receive a response in the selected country's dialect
+5. Check browser console for debug logs
+6. Monitor Railway logs for backend processing
+
+### Expected Behavior
+- ✅ WebSocket connection stays stable
+- ✅ Messages are sent without disconnection
+- ✅ Assistant responses appear in chat
+- ✅ Responses use appropriate regional Spanish
+- ✅ Debug logs show message flow
+
+## Troubleshooting
+
+### WebSocket Issues
+- Check Railway logs for "WEBSOCKET CONNECTED" messages
+- Verify frontend is using correct backend URL
+- Ensure CORS headers are properly configured
+
+### LLM Response Issues
+- Verify `LANGDB_API_KEY` and `LANGDB_GATEWAY_URL` are set
+- Check Railway logs for LLM adapter readiness
+- Ensure model name is correct in environment variables
+
+### Persona Loading Issues
+- Check `/api/personas` endpoint returns valid JSON
+- Verify persona files exist in `server/personas/` directory
+- Ensure personas are marked as `safe_reviewed: true`
+
+## Debug Logs
+
+### Frontend Console Logs (Expected)
+```
+🔍 API CONFIGURATION: Backend URL: https://your-app.railway.app
+🔌 INITIALIZING WEBSOCKET CONNECTION...
+✅ WEBSOCKET CONNECTED: [socket_id]
+📤 SENDING MESSAGE: { message: "Hola", country: "mex" }
+📤 MESSAGE SENT
+📨 RECEIVED assistant_delta: { message_id: "...", chunk: "¡Qué padre! ..." }
+📨 RECEIVED assistant_final: { message_id: "...", final_content: "..." }
+```
+
+### Backend Railway Logs (Expected)
+```
+✅ SERVER SUCCESSFULLY RUNNING ON PORT 3001
+🔧 Startup validation result: PASS
+🔌 Client connected: [socket_id]
+📨 RECEIVED user_message: { message: "Hola", selected_country_key: "mex", ... }
+🤖 PROCESSING MESSAGE: [message_id] - "Hola" for country: mex
+✅ USING PERSONA: México (mex)
+🚀 CALLING LLM: 2 messages
+📝 STARTING STREAM: [message_id]
+✅ LLM RESPONSE COMPLETE: [message_id] (150 chars)
+```
+
 ## API Endpoints
 
-### REST API
-
-- `GET /health` - Health check
-- `GET /api/personas` - Get list of available personas
+- `GET /health` - Health check with startup validation status
+- `GET /api/personas` - List available personas
 - `GET /api/personas/:id` - Get specific persona
 
-### WebSocket Events
+## WebSocket Events
 
-#### Client → Server
+### Client → Server
 - `user_message` - Send user message with country selection
-  ```json
-  {
-    "message": "Hola, ¿cómo estás?",
-    "selected_country_key": "mex",
-    "client_ts": 1640995200000,
-    "message_id": "msg_123"
-  }
-  ```
 
-- `cancel_message` - Cancel ongoing message generation
-  ```json
-  {
-    "message_id": "msg_123"
-  }
-  ```
-
-#### Server → Client
-- `assistant_delta` - Streaming response chunk
-  ```json
-  {
-    "message_id": "msg_123",
-    "chunk": "¡Qué padre! Estoy",
-    "is_final": false,
-    "timestamp": 1640995200000
-  }
-  ```
-
+### Server → Client
+- `assistant_delta` - Streaming response chunks
 - `assistant_final` - Complete response
-  ```json
-  {
-    "message_id": "msg_123",
-    "final_content": "¡Qué padre! Estoy muy bien, ¿y vos?",
-    "timestamp": 1640995200000
-  }
-  ```
-
-- `typing_start` / `typing_end` - Typing indicator
+- `typing_start` / `typing_end` - Typing indicators
 - `error` - Error messages
 
-## Persona Management
+## Support
 
-Personas are stored as JSON files in the `personas/` directory:
+If you encounter issues:
+1. Run `./test_chat.sh` to diagnose problems
+2. Check Railway and Vercel deployment logs
+3. Verify environment variables are correctly set
+4. Ensure LangDB credentials are valid
+5. Test WebSocket connectivity manually
 
-- `manifest.json` - List of available personas
-- `{country_key}.json` - Individual persona configurations
-
-Each persona includes:
-- System prompt with regional slang instructions
-- Safety settings
-- Metadata (creation date, review status)
-
-## Development
-
-### Scripts
-- `npm run dev` - Start development server with hot reload
-- `npm run build` - Build for production
-- `npm start` - Start production server
-- `npm run lint` - Run ESLint
-
-### Project Structure
+## Project Structure
 ```
 src/
 ├── index.ts              # Server entry point
