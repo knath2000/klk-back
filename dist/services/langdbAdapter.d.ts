@@ -6,6 +6,5 @@ export declare class LangDBAdapter extends BaseLLMAdapter {
     streamCompletion(messages: LLMMessage[], options: LLMOptions): AsyncIterable<DeltaChunk>;
     fetchCompletion(messages: LLMMessage[], options: LLMOptions): Promise<string>;
     cancel(requestId: string): Promise<void>;
-    cleanup(): void;
 }
 //# sourceMappingURL=langdbAdapter.d.ts.map

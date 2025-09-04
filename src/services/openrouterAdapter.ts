@@ -1,9 +1,9 @@
-import fetch, { AbortError } from 'node-fetch';
 import { BaseLLMAdapter } from './llmAdapter';
 import { LLMMessage, DeltaChunk, LLMOptions } from '../types';
 
 export class OpenRouterAdapter extends BaseLLMAdapter {
   private activeRequests: Map<string, AbortController> = new Map();
+  private activeStreams: Map<string, { reader: ReadableStreamDefaultReader<Uint8Array>; decoder: TextDecoder; controller: AbortController }> = new Map();
 
   async *streamCompletion(
     messages: LLMMessage[],
@@ -13,6 +13,8 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
     const requestId = options.requestId || `req_${Date.now()}`;
 
     this.activeRequests.set(requestId, controller);
+
+    let response: Response | null = null;
 
     try {
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
@@ -36,13 +38,17 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
         throw new Error(`OpenRouter API error: ${response.status} ${errorText}`);
       }
 
-      const reader = (response.body as any)?.getReader();
-      if (!reader) {
+      if (!response.body) {
         throw new Error('Response body is not readable');
       }
 
+      // Use proper streaming with native ReadableStream
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+
+      // Store stream resources for cleanup
+      this.activeStreams.set(requestId, { reader, decoder, controller });
 
       try {
         while (true) {
@@ -88,19 +94,28 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
           }
         }
       } finally {
-        reader.releaseLock();
+        // Ensure reader is always released
+        if (reader) {
+          try {
+            await reader.cancel();
+          } catch (cancelError) {
+            console.warn(`Failed to cancel reader for ${requestId}:`, cancelError);
+          }
+        }
+        // Clean up stream resources
+        this.activeStreams.delete(requestId);
       }
     } catch (error: any) {
-      if (error instanceof AbortError) {
+      if (error.name === 'AbortError' || error.message.includes('aborted')) {
         console.log(`Request ${requestId} was cancelled`);
       } else {
         console.error('Streaming error:', error);
         throw error;
       }
     } finally {
+      // Ensure cleanup happens even if error occurs
       this.activeRequests.delete(requestId);
     }
-    // generator completes without returning a value
   }
 
   async fetchCompletion(
@@ -137,24 +152,47 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
       const data: any = await response.json();
       return data.choices?.[0]?.message?.content || '';
     } catch (error: any) {
-      if (error instanceof AbortError) {
+      if (error.name === 'AbortError' || error.message.includes('aborted')) {
         console.log(`Request ${requestId} was cancelled`);
         return '';
       } else {
-        console.error('Completion error:', error);
-        // Return empty string on error to satisfy return type
+        console.error(`Completion error for ${requestId}:`, error);
+        // On error, return empty string so callers always get a string
         return '';
       }
     } finally {
+      // Ensure cleanup happens even if error occurs
       this.activeRequests.delete(requestId);
     }
   }
 
   async cancel(requestId: string): Promise<void> {
     const controller = this.activeRequests.get(requestId);
+    const streamResources = this.activeStreams.get(requestId);
+
     if (controller) {
-      controller.abort();
-      this.activeRequests.delete(requestId);
+      try {
+        controller.abort();
+        console.log(`Request ${requestId} cancelled successfully`);
+      } catch (error) {
+        console.warn(`Error cancelling request ${requestId}:`, error);
+      }
     }
+
+    // Clean up stream resources
+    if (streamResources) {
+      try {
+        const { reader } = streamResources;
+        if (reader) {
+          await reader.cancel();
+        }
+      } catch (error) {
+        console.warn(`Error cleaning up stream resources for ${requestId}:`, error);
+      }
+    }
+
+    // Remove from tracking maps
+    this.activeRequests.delete(requestId);
+    this.activeStreams.delete(requestId);
   }
 }

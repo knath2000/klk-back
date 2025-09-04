@@ -1,40 +1,6 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LangDBAdapter = void 0;
-const node_fetch_1 = __importStar(require("node-fetch"));
 const llmAdapter_1 = require("./llmAdapter");
 class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
     constructor() {
@@ -46,16 +12,15 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
         const controller = new AbortController();
         const requestId = options.requestId || `req_${Date.now()}`;
         this.activeRequests.set(requestId, controller);
-        let reader = null;
-        let decoder = null;
         let response = null;
         try {
             // Add timeout to prevent hanging requests
             const timeoutId = setTimeout(() => {
                 console.warn(`Request ${requestId} timed out, aborting...`);
                 controller.abort();
-            }, options.timeout || 60000); // 60 second default timeout
-            response = await (0, node_fetch_1.default)(`${this.baseUrl}/chat/completions`, {
+            }, options.timeout || 60000);
+            // Use native fetch (Node.js 18+)
+            response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
@@ -75,11 +40,12 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
                 const errorText = await response.text();
                 throw new Error(`LangDB API error: ${response.status} ${errorText}`);
             }
-            reader = response.body?.getReader();
-            if (!reader) {
+            if (!response.body) {
                 throw new Error('Response body is not readable');
             }
-            decoder = new TextDecoder();
+            // Use proper streaming with native ReadableStream
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
             let buffer = '';
             // Store stream resources for cleanup
             this.activeStreams.set(requestId, { reader, decoder, controller });
@@ -128,10 +94,10 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
                 // Ensure reader is always released
                 if (reader) {
                     try {
-                        reader.releaseLock();
+                        await reader.cancel();
                     }
-                    catch (releaseError) {
-                        console.warn(`Failed to release reader lock for ${requestId}:`, releaseError);
+                    catch (cancelError) {
+                        console.warn(`Failed to cancel reader for ${requestId}:`, cancelError);
                     }
                 }
                 // Clean up stream resources
@@ -139,7 +105,8 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             }
         }
         catch (error) {
-            if (error instanceof node_fetch_1.AbortError) {
+            // Handle abort errors properly
+            if (error.name === 'AbortError' || error.message.includes('aborted')) {
                 console.log(`Request ${requestId} was cancelled`);
             }
             else {
@@ -154,19 +121,7 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
         finally {
             // Ensure cleanup happens even if error occurs
             this.activeRequests.delete(requestId);
-            // Additional cleanup for any remaining resources
-            if (reader) {
-                try {
-                    reader.releaseLock();
-                }
-                catch (releaseError) {
-                    console.warn(`Failed to release reader lock in finally for ${requestId}:`, releaseError);
-                }
-            }
-            // Clean up from active streams map
-            this.activeStreams.delete(requestId);
         }
-        // Generator completes without returning a value
     }
     async fetchCompletion(messages, options) {
         const controller = new AbortController();
@@ -178,7 +133,7 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
                 console.warn(`Request ${requestId} timed out, aborting...`);
                 controller.abort();
             }, options.timeout || 30000); // 30 second default timeout
-            const response = await (0, node_fetch_1.default)(`${this.baseUrl}/chat/completions`, {
+            const response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
@@ -202,7 +157,7 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             return data.choices?.[0]?.message?.content || '';
         }
         catch (error) {
-            if (error instanceof node_fetch_1.AbortError) {
+            if (error.name === 'AbortError' || error.message.includes('aborted')) {
                 console.log(`Request ${requestId} was cancelled`);
                 return '';
             }
@@ -217,6 +172,7 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             }
         }
         finally {
+            // Ensure cleanup happens even if error occurs
             this.activeRequests.delete(requestId);
         }
     }
@@ -237,7 +193,7 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             try {
                 const { reader } = streamResources;
                 if (reader) {
-                    reader.releaseLock();
+                    await reader.cancel();
                 }
             }
             catch (error) {
@@ -247,23 +203,6 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
         // Remove from tracking maps
         this.activeRequests.delete(requestId);
         this.activeStreams.delete(requestId);
-    }
-    // Cleanup method for graceful shutdown
-    cleanup() {
-        console.log('Cleaning up LangDB adapter resources...');
-        // Cancel all active requests
-        for (const [requestId] of this.activeRequests) {
-            try {
-                this.cancel(requestId);
-            }
-            catch (error) {
-                console.warn(`Error cancelling request ${requestId} during cleanup:`, error);
-            }
-        }
-        // Clear all tracking maps
-        this.activeRequests.clear();
-        this.activeStreams.clear();
-        console.log('LangDB adapter cleanup completed');
     }
 }
 exports.LangDBAdapter = LangDBAdapter;

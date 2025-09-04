@@ -1,52 +1,20 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.OpenRouterAdapter = void 0;
-const node_fetch_1 = __importStar(require("node-fetch"));
 const llmAdapter_1 = require("./llmAdapter");
 class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
     constructor() {
         super(...arguments);
         this.activeRequests = new Map();
+        this.activeStreams = new Map();
     }
     async *streamCompletion(messages, options) {
         const controller = new AbortController();
         const requestId = options.requestId || `req_${Date.now()}`;
         this.activeRequests.set(requestId, controller);
+        let response = null;
         try {
-            const response = await (0, node_fetch_1.default)(`${this.baseUrl}/chat/completions`, {
+            const response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
@@ -65,12 +33,15 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
                 const errorText = await response.text();
                 throw new Error(`OpenRouter API error: ${response.status} ${errorText}`);
             }
-            const reader = response.body?.getReader();
-            if (!reader) {
+            if (!response.body) {
                 throw new Error('Response body is not readable');
             }
+            // Use proper streaming with native ReadableStream
+            const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
+            // Store stream resources for cleanup
+            this.activeStreams.set(requestId, { reader, decoder, controller });
             try {
                 while (true) {
                     const { done, value } = await reader.read();
@@ -113,11 +84,21 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
                 }
             }
             finally {
-                reader.releaseLock();
+                // Ensure reader is always released
+                if (reader) {
+                    try {
+                        await reader.cancel();
+                    }
+                    catch (cancelError) {
+                        console.warn(`Failed to cancel reader for ${requestId}:`, cancelError);
+                    }
+                }
+                // Clean up stream resources
+                this.activeStreams.delete(requestId);
             }
         }
         catch (error) {
-            if (error instanceof node_fetch_1.AbortError) {
+            if (error.name === 'AbortError' || error.message.includes('aborted')) {
                 console.log(`Request ${requestId} was cancelled`);
             }
             else {
@@ -126,16 +107,16 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
             }
         }
         finally {
+            // Ensure cleanup happens even if error occurs
             this.activeRequests.delete(requestId);
         }
-        // generator completes without returning a value
     }
     async fetchCompletion(messages, options) {
         const controller = new AbortController();
         const requestId = options.requestId || `req_${Date.now()}`;
         this.activeRequests.set(requestId, controller);
         try {
-            const response = await (0, node_fetch_1.default)(`${this.baseUrl}/chat/completions`, {
+            const response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
@@ -158,26 +139,48 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
             return data.choices?.[0]?.message?.content || '';
         }
         catch (error) {
-            if (error instanceof node_fetch_1.AbortError) {
+            if (error.name === 'AbortError' || error.message.includes('aborted')) {
                 console.log(`Request ${requestId} was cancelled`);
                 return '';
             }
             else {
-                console.error('Completion error:', error);
-                // Return empty string on error to satisfy return type
+                console.error(`Completion error for ${requestId}:`, error);
+                // On error, return empty string so callers always get a string
                 return '';
             }
         }
         finally {
+            // Ensure cleanup happens even if error occurs
             this.activeRequests.delete(requestId);
         }
     }
     async cancel(requestId) {
         const controller = this.activeRequests.get(requestId);
+        const streamResources = this.activeStreams.get(requestId);
         if (controller) {
-            controller.abort();
-            this.activeRequests.delete(requestId);
+            try {
+                controller.abort();
+                console.log(`Request ${requestId} cancelled successfully`);
+            }
+            catch (error) {
+                console.warn(`Error cancelling request ${requestId}:`, error);
+            }
         }
+        // Clean up stream resources
+        if (streamResources) {
+            try {
+                const { reader } = streamResources;
+                if (reader) {
+                    await reader.cancel();
+                }
+            }
+            catch (error) {
+                console.warn(`Error cleaning up stream resources for ${requestId}:`, error);
+            }
+        }
+        // Remove from tracking maps
+        this.activeRequests.delete(requestId);
+        this.activeStreams.delete(requestId);
     }
 }
 exports.OpenRouterAdapter = OpenRouterAdapter;

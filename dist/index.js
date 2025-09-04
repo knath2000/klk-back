@@ -22,16 +22,18 @@ app.use((req, res, next) => {
         process.env.FRONTEND_URL.split(',').map(url => url.trim()) :
         ["http://localhost:3000", "https://klk-front.vercel.app"];
     const origin = req.headers.origin;
+    // Always set CORS headers for allowed origins
     if (origin && allowedOrigins.includes(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
-    else if (process.env.NODE_ENV === 'development') {
-        // Allow all origins in development
+    else if (!origin || process.env.NODE_ENV === 'development') {
+        // Allow all origins in development or for requests without origin
         res.setHeader('Access-Control-Allow-Origin', '*');
     }
+    // Set common CORS headers
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
     res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
     // Handle preflight requests
     if (req.method === 'OPTIONS') {
@@ -264,11 +266,13 @@ io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
     // Handle user messages
     socket.on('user_message', async (payload) => {
+        console.log('📨 RECEIVED user_message:', payload);
         try {
             await chatService.handleUserMessage(socket, payload);
+            console.log('✅ PROCESSED user_message successfully');
         }
         catch (error) {
-            console.error('Error handling user message:', error);
+            console.error('❌ ERROR handling user message:', error);
             socket.emit('error', {
                 message: 'Failed to process message',
                 code: 'PROCESSING_ERROR'
@@ -313,10 +317,14 @@ if (process.env.MODAL_STARTUP) {
 }
 // Now listen immediately - Railway will only expose port when 
 // container process writes to stdout, stderr, or /tmp/app-initialized
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
     console.log(`✅ SERVER SUCCESSFULLY RUNNING ON PORT ${PORT}`);
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`📊 LLM Adapter: ${llmAdapter.isReady() ? 'READY' : 'NOT READY'}`);
+    // Run startup validation
+    console.log('🔧 Running startup validation...');
+    const validationResult = await validateStartup();
+    console.log(`🔧 Startup validation result: ${validationResult ? 'PASS' : 'FAIL'}`);
     // Add memory usage logging periodically
     setInterval(() => {
         const memoryUsage = process.memoryUsage();

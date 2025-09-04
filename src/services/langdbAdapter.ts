@@ -1,10 +1,9 @@
-import fetch, { AbortError } from 'node-fetch';
 import { BaseLLMAdapter } from './llmAdapter';
 import { LLMMessage, DeltaChunk, LLMOptions } from '../types';
 
 export class LangDBAdapter extends BaseLLMAdapter {
   private activeRequests: Map<string, AbortController> = new Map();
-  private activeStreams: Map<string, { reader: any; decoder: TextDecoder; controller: AbortController }> = new Map();
+  private activeStreams: Map<string, { reader: ReadableStreamDefaultReader<Uint8Array>; decoder: TextDecoder; controller: AbortController }> = new Map();
 
   async *streamCompletion(
     messages: LLMMessage[],
@@ -15,17 +14,16 @@ export class LangDBAdapter extends BaseLLMAdapter {
 
     this.activeRequests.set(requestId, controller);
 
-    let reader: any = null;
-    let decoder: TextDecoder | null = null;
-    let response: any = null;
+    let response: Response | null = null;
 
     try {
       // Add timeout to prevent hanging requests
       const timeoutId = setTimeout(() => {
         console.warn(`Request ${requestId} timed out, aborting...`);
         controller.abort();
-      }, options.timeout || 60000); // 60 second default timeout
+      }, options.timeout || 60000);
 
+      // Use native fetch (Node.js 18+)
       response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -49,12 +47,13 @@ export class LangDBAdapter extends BaseLLMAdapter {
         throw new Error(`LangDB API error: ${response.status} ${errorText}`);
       }
 
-      reader = (response.body as any)?.getReader();
-      if (!reader) {
+      if (!response.body) {
         throw new Error('Response body is not readable');
       }
 
-      decoder = new TextDecoder();
+      // Use proper streaming with native ReadableStream
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
       let buffer = '';
 
       // Store stream resources for cleanup
@@ -107,16 +106,17 @@ export class LangDBAdapter extends BaseLLMAdapter {
         // Ensure reader is always released
         if (reader) {
           try {
-            reader.releaseLock();
-          } catch (releaseError) {
-            console.warn(`Failed to release reader lock for ${requestId}:`, releaseError);
+            await reader.cancel();
+          } catch (cancelError) {
+            console.warn(`Failed to cancel reader for ${requestId}:`, cancelError);
           }
         }
         // Clean up stream resources
         this.activeStreams.delete(requestId);
       }
     } catch (error: any) {
-      if (error instanceof AbortError) {
+      // Handle abort errors properly
+      if (error.name === 'AbortError' || error.message.includes('aborted')) {
         console.log(`Request ${requestId} was cancelled`);
       } else {
         console.error(`Streaming error for ${requestId}:`, {
@@ -129,20 +129,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
     } finally {
       // Ensure cleanup happens even if error occurs
       this.activeRequests.delete(requestId);
-      
-      // Additional cleanup for any remaining resources
-      if (reader) {
-        try {
-          reader.releaseLock();
-        } catch (releaseError) {
-          console.warn(`Failed to release reader lock in finally for ${requestId}:`, releaseError);
-        }
-      }
-      
-      // Clean up from active streams map
-      this.activeStreams.delete(requestId);
     }
-    // Generator completes without returning a value
   }
 
   async fetchCompletion(
@@ -187,7 +174,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
       const data: any = await response.json();
       return data.choices?.[0]?.message?.content || '';
     } catch (error: any) {
-      if (error instanceof AbortError) {
+      if (error.name === 'AbortError' || error.message.includes('aborted')) {
         console.log(`Request ${requestId} was cancelled`);
         return '';
       } else {
@@ -200,6 +187,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
         return '';
       }
     } finally {
+      // Ensure cleanup happens even if error occurs
       this.activeRequests.delete(requestId);
     }
   }
@@ -207,7 +195,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
   async cancel(requestId: string): Promise<void> {
     const controller = this.activeRequests.get(requestId);
     const streamResources = this.activeStreams.get(requestId);
-    
+
     if (controller) {
       try {
         controller.abort();
@@ -216,41 +204,21 @@ export class LangDBAdapter extends BaseLLMAdapter {
         console.warn(`Error cancelling request ${requestId}:`, error);
       }
     }
-    
+
     // Clean up stream resources
     if (streamResources) {
       try {
         const { reader } = streamResources;
         if (reader) {
-          reader.releaseLock();
+          await reader.cancel();
         }
       } catch (error) {
         console.warn(`Error cleaning up stream resources for ${requestId}:`, error);
       }
     }
-    
+
     // Remove from tracking maps
     this.activeRequests.delete(requestId);
     this.activeStreams.delete(requestId);
-  }
-
-  // Cleanup method for graceful shutdown
-  cleanup(): void {
-    console.log('Cleaning up LangDB adapter resources...');
-    
-    // Cancel all active requests
-    for (const [requestId] of this.activeRequests) {
-      try {
-        this.cancel(requestId);
-      } catch (error) {
-        console.warn(`Error cancelling request ${requestId} during cleanup:`, error);
-      }
-    }
-    
-    // Clear all tracking maps
-    this.activeRequests.clear();
-    this.activeStreams.clear();
-    
-    console.log('LangDB adapter cleanup completed');
   }
 }
