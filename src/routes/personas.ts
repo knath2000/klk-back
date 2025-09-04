@@ -8,7 +8,7 @@ const router = Router();
 
 /**
  * GET /api/personas
- * Returns the list of available personas for the client
+ * Returnss the list of available personas for the client
  */
 router.get('/', (req: Request, res: Response<PersonasResponse | ErrorResponse>) => {
   try {
