@@ -25,5 +25,14 @@
     "safe_reviewed": true,
     "created_by": "system",
     "created_at": "2025-08-29T20:55:00.000Z"
+  },
+  {
+    "id": "dom",
+    "country_key": "dom",
+    "displayName": "República Dominicana",
+    "locale_hint": "Español dominicano",
+    "safe_reviewed": true,
+    "created_by": "system",
+    "created_at": "2025-09-04T20:50:00.000Z"
   }
 ]
