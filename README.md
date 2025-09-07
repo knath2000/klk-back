@@ -2,7 +2,7 @@
 
 Backend server for the AI Chat App with Spanish Slang support.
 
-## Features
+## Featuress
 
 - WebSocket-based real-time chat
 - Persona-driven AI responses with regional Spanish slang
