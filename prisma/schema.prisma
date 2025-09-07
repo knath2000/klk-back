@@ -1,0 +1,228 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User management
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  password_hash String?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+  sessions      Session[]
+  subscriptions Subscription[]
+  user_settings UserSettings[]
+  // Team relationships
+  team_memberships TeamMember[]
+  owned_teams      Team[]     @relation("TeamOwner")
+  created_teams    Team[]     @relation("TeamCreator")
+  // Collaboration relationships
+  shared_conversations SharedConversation[]
+}
+
+model Session {
+  id         String   @id @default(uuid())
+  user_id    String
+  user       User     @relation(fields: [user_id], references: [id])
+  token      String   @unique
+  expires_at DateTime
+  created_at DateTime @default(now())
+}
+
+model Subscription {
+  id                    String   @id @default(uuid())
+  user_id               String   @unique
+  user                  User     @relation(fields: [user_id], references: [id])
+  plan                  String   @default("free")
+  status                String   @default("active")
+  current_period_start  DateTime
+  current_period_end    DateTime
+  created_at            DateTime @default(now())
+}
+
+// Team management
+model Team {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  owner_id    String
+  owner       User      @relation("TeamOwner", fields: [owner_id], references: [id])
+  created_by  String
+  creator     User      @relation("TeamCreator", fields: [created_by], references: [id])
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+  is_active   Boolean   @default(true)
+  
+  // Relationships
+  members     TeamMember[]
+  conversations SharedConversation[]
+  permissions TeamPermission[]
+}
+
+model TeamMember {
+  id         String   @id @default(uuid())
+  team_id    String
+  team       Team     @relation(fields: [team_id], references: [id])
+  user_id    String
+  user       User     @relation(fields: [user_id], references: [id])
+  role       String   @default("member") // member, admin, owner
+  joined_at  DateTime @default(now())
+  is_active  Boolean  @default(true)
+  
+  @@unique([team_id, user_id])
+}
+
+model TeamPermission {
+  id          String   @id @default(uuid())
+  team_id     String
+  team        Team     @relation(fields: [team_id], references: [id])
+  resource_type String // conversation, file, etc.
+  resource_id String
+  permission  String   // read, write, admin
+  granted_by  String
+  granted_at  DateTime @default(now())
+  
+  @@unique([team_id, resource_type, resource_id])
+}
+
+// Conversation management
+model Conversation {
+  id            String    @id @default(uuid())
+  user_id       String
+  user          User      @relation(fields: [user_id], references: [id])
+  title         String
+  model         String
+  persona_id    String?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+  message_count Int       @default(0)
+  is_active     Boolean   @default(true)
+  messages      ConversationMessage[]
+  model_switches ConversationModel[]
+  // Collaboration
+  shared_with   SharedConversation[]
+  team_id       String?
+  team          Team?     @relation(fields: [team_id], references: [id])
+}
+
+model ConversationMessage {
+  id            String   @id @default(uuid())
+  conversation_id String
+  conversation  Conversation @relation(fields: [conversation_id], references: [id])
+  role          String   // 'user' or 'assistant'
+  content       String
+  model         String
+  persona_id    String?
+  tokens_used   Int?
+  created_at    DateTime @default(now())
+}
+
+model ConversationModel {
+  id              String   @id @default(uuid())
+  conversation_id String
+  conversation    Conversation @relation(fields: [conversation_id], references: [id])
+  model_id        String
+  switched_at     DateTime @default(now())
+  reason          String?
+}
+
+// Shared conversations for collaboration
+model SharedConversation {
+  id              String   @id @default(uuid())
+  conversation_id String
+  conversation    Conversation @relation(fields: [conversation_id], references: [id])
+  shared_with_id  String
+  shared_with     User     @relation(fields: [shared_with_id], references: [id])
+  shared_by_id    String
+  shared_by       User     @relation(fields: [shared_by_id], references: [id])
+  permission      String   @default("read") // read, write, admin
+  shared_at       DateTime @default(now())
+  expires_at      DateTime?
+  is_active       Boolean  @default(true)
+  
+  @@unique([conversation_id, shared_with_id])
+}
+
+// User settings
+model UserSettings {
+  user_id                  String  @id
+  user                     User    @relation(fields: [user_id], references: [id])
+  theme                    String  @default("system")
+  language                 String  @default("en")
+  default_model            String  @default("gpt-4o-mini")
+  default_persona          String?
+  message_history_limit    Int     @default(100)
+  auto_save                Boolean @default(true)
+  notifications_enabled    Boolean @default(true)
+  local_storage_enabled    Boolean @default(true)
+  conversation_sync_enabled Boolean @default(true)
+}
+
+// Usage tracking
+model UsageLog {
+  id         String   @id @default(uuid())
+  user_id    String
+  model_id   String
+  tokens_used Int
+  period     String   // YYYY-MM format
+  created_at DateTime @default(now())
+
+  @@unique([user_id, model_id, period])
+}
+
+// Analytics and reporting
+model ConversationAnalytics {
+  id              String   @id @default(uuid())
+  conversation_id String
+  conversation    Conversation @relation(fields: [conversation_id], references: [id])
+  user_id         String
+  user            User     @relation(fields: [user_id], references: [id])
+  message_count   Int
+  token_usage     Int
+  model_usage     Json     // { "gpt-4o": 100, "claude": 50 }
+  duration_seconds Int
+  first_message_at DateTime
+  last_message_at DateTime
+  avg_response_time Float?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+  
+  @@unique([conversation_id])
+}
+
+model UserAnalytics {
+  id              String   @id @default(uuid())
+  user_id         String   @unique
+  user            User     @relation(fields: [user_id], references: [id])
+  total_conversations Int   @default(0)
+  total_messages  Int      @default(0)
+  total_tokens    Int      @default(0)
+  active_days     Int      @default(0)
+  favorite_model  String?
+  favorite_persona String?
+  last_active_at  DateTime?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+}
+
+model TeamAnalytics {
+  id              String   @id @default(uuid())
+  team_id         String   @unique
+  team            Team     @relation(fields: [team_id], references: [id])
+  total_conversations Int   @default(0)
+  total_messages  Int      @default(0)
+  total_tokens    Int      @default(0)
+  active_members  Int      @default(0)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+}

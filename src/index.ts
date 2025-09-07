@@ -1,410 +1,272 @@
 import express from 'express';
-import { createServer } from 'http';
+import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import helmet from 'helmet';
 import dotenv from 'dotenv';
-import * as fs from 'fs';
-import * as path from 'path';
+import next from 'next';
 
-// Load environment variables
+// Import routes
+import conversationsRouter from './routes/conversations';
+import personasRouter from './routes/personas';
+import modelsRouter from './routes/models';
+import subscriptionRouter from './routes/subscription';
+import searchRouter from './routes/search';
+import teamsRouter from './routes/teams';
+import analyticsRouter from './routes/analytics';
+import collaborationRouter from './routes/collaboration';
+
+// Import services
+import { getSupabase } from './services/db';
+import { collaborationService } from './services/collaborationService';
+
 dotenv.config();
 
-import { ChatService } from './services/chatService';
-import { LangDBAdapter } from './services/langdbAdapter';
-import personasRouter from './routes/personas';
-import { personaService } from './services/personaService';
+const dev = process.env.NODE_ENV !== 'production';
+const app = next({ dev });
+const handle = app.getRequestHandler();
 
-// Initialize Express app
-const app = express();
-const server = createServer(app);
-
-// Add comprehensive CORS headers
-app.use((req, res, next) => {
-  const allowedOrigins = process.env.FRONTEND_URL ? 
-    process.env.FRONTEND_URL.split(',').map(url => url.trim()) : 
-    ["http://localhost:3000", "https://klk-front.vercel.app"];
+app.prepare().then(() => {
+  const server = express();
+  const httpServer = http.createServer(server);
   
-  const origin = req.headers.origin;
-  
-  // Always set CORS headers for allowed origins
-  if (origin && allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-  } else if (!origin || process.env.NODE_ENV === 'development') {
-    // Allow all origins in development or for requests without origin
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  }
-  
-  // Set common CORS headers
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
-  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
-  
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-  
-  next();
-});
-
-// Initialize Socket.IO with comprehensive CORS configuration
-const io = new Server(server, {
-  cors: {
-    origin: process.env.FRONTEND_URL ? 
-      process.env.FRONTEND_URL.split(',').map(url => url.trim()) : 
-      ["http://localhost:3000", "https://klk-front.vercel.app"],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true
-  },
-  transports: ['websocket', 'polling']
-});
-
-// Add debug logging for CORS troubleshooting
-app.use((req, res, next) => {
-  console.log('=== CORS Debug Info ===');
-  console.log('Request Origin:', req.headers.origin);
-  console.log('Allowed Origins:', process.env.FRONTEND_URL);
-  console.log('Request Method:', req.method);
-  console.log('Request Path:', req.path);
-  console.log('========================');
-  next();
-});
-
-// Routes
-app.use('/api/personas', personasRouter);
-
-// Add Railway health check endpoints
-app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'healthy', 
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+  // Initialize Socket.IO with enhanced configuration
+  const io = new Server(httpServer, {
+    cors: {
+      origin: process.env.NEXT_PUBLIC_FRONTEND_URL || "http://localhost:3000",
+      methods: ["GET", "POST"],
+      credentials: true
+    },
+    transports: ['websocket', 'polling']
   });
-});
 
-// Add Railway-specific ready check
-app.get('/ready', (req, res) => {
-  res.status(200).json({ 
-    status: 'ready',
-    timestamp: new Date().toISOString(),
-    connections: io ? io.engine.clientsCount : 0
-  });
-});
+  // Store active users and their conversations
+  const userRooms = new Map<string, Set<string>>(); // userId -> Set of conversationIds
+  const conversationRooms = new Map<string, Set<string>>(); // conversationId -> Set of userIds
 
-// Enhanced health check with detailed diagnostics
-app.get('/health', (req, res) => {
-  const timestamp = new Date().toISOString();
-  console.log(`🏥 HEALTH CHECK: ${timestamp} - ${req.ip}`);
-  
-  try {
-    const personas = personaService.getAllPersonas();
-    const personaCount = personas.length;
-    const isHealthy = personaCount > 0;
+  // Enhanced WebSocket handlers for real-time collaboration
+  io.on('connection', (socket) => {
+    console.log('User connected:', socket.id);
     
-    const healthStatus = {
-      server: 'ok',
-      timestamp,
-      uptime: process.uptime(),
-      memory: process.memoryUsage(),
-      personas: {
-        count: personaCount,
-        loaded: personaCount > 0,
-        details: personas.map(p => ({
-          id: p.id,
-          country_key: p.country_key,
-          displayName: p.displayName,
-          safe_reviewed: p.safe_reviewed
-        }))
-      },
-      environment: {
-        NODE_ENV: process.env.NODE_ENV,
-        PORT: process.env.PORT,
-        CWD: process.cwd(),
-        __dirname: __dirname
-      },
-      fileSystem: {
-        cwdContents: fs.existsSync(process.cwd()) ? fs.readdirSync(process.cwd()) : 'CWD not accessible',
-        personasDir: fs.existsSync(path.join(process.cwd(), 'personas')) ? 
-                   fs.readdirSync(path.join(process.cwd(), 'personas')) : 
-                   'Personas directory not found'
+    let currentUserId: string | null = null;
+    let currentConversationId: string | null = null;
+
+    // Authentication
+    socket.on('authenticate', (userId: string) => {
+      console.log('User authenticated:', userId);
+      currentUserId = userId;
+      
+      // Store user connection
+      if (!userRooms.has(userId)) {
+        userRooms.set(userId, new Set());
       }
-    };
-    
-    res.status(isHealthy ? 200 : 503).json(healthStatus);
-  } catch (error) {
-    console.error('❌ Health check error:', error);
-    res.status(500).json({
-      server: 'error',
-      error: error instanceof Error ? error.message : String(error),
-      timestamp
     });
-  }
-});
 
-// Add these signal handlers BEFORE the server.listen() call
+    // Join conversation room
+    socket.on('join_conversation', async (conversationId: string) => {
+      if (!currentUserId) {
+        socket.emit('error', { message: 'Authentication required' });
+        return;
+      }
 
-// Graceful shutdown handling
-let serverClosed = false;
+      try {
+        // Check if user has access to this conversation
+        const hasAccess = await collaborationService.hasAccessToConversation(conversationId, currentUserId);
+        if (!hasAccess) {
+          socket.emit('error', { message: 'Access denied to conversation' });
+          return;
+        }
 
-const gracefulShutdown = async (signal: string) => {
-  if (serverClosed) return;
-  
-  serverClosed = true;
-  console.log(`${signal} received, shutting down gracefully...`);
-  
-  try {
-    // Close WebSocket connections
-    if (io) {
-      io.close(() => {
-        console.log('WebSocket server closed');
+        // Join the conversation room
+        socket.join(`conversation:${conversationId}`);
+        currentConversationId = conversationId;
+
+        // Track user in conversation
+        if (!conversationRooms.has(conversationId)) {
+          conversationRooms.set(conversationId, new Set());
+        }
+        conversationRooms.get(conversationId)?.add(currentUserId);
+        userRooms.get(currentUserId)?.add(conversationId);
+
+        console.log(`User ${currentUserId} joined conversation ${conversationId}`);
+        socket.emit('joined_conversation', { conversationId });
+
+        // Notify other users in the conversation
+        socket.to(`conversation:${conversationId}`).emit('user_joined', {
+          userId: currentUserId,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        console.error('Error joining conversation:', error);
+        socket.emit('error', { message: 'Failed to join conversation' });
+      }
+    });
+
+    // Leave conversation room
+    socket.on('leave_conversation', (conversationId: string) => {
+      if (!currentUserId) return;
+
+      socket.leave(`conversation:${conversationId}`);
+      
+      // Remove user from tracking
+      if (currentUserId) {
+        conversationRooms.get(conversationId)?.delete(currentUserId);
+        userRooms.get(currentUserId)?.delete(conversationId);
+      }
+
+      console.log(`User ${currentUserId} left conversation ${conversationId}`);
+      
+      // Notify other users in the conversation
+      socket.to(`conversation:${conversationId}`).emit('user_left', {
+        userId: currentUserId,
+        timestamp: new Date().toISOString()
       });
-    }
-    
-    // Close HTTP server
-    await new Promise<void>((resolve) => {
-      server.close(() => {
-        console.log('HTTP server closed');
-        resolve();
+    });
+
+    // Send message to conversation
+    socket.on('send_message', async (data: { conversationId: string; message: any }) => {
+      if (!currentUserId) {
+        socket.emit('error', { message: 'Authentication required' });
+        return;
+      }
+
+      const { conversationId, message } = data;
+
+      try {
+        // Check if user has access to this conversation
+        const hasAccess = await collaborationService.hasAccessToConversation(conversationId, currentUserId);
+        if (!hasAccess) {
+          socket.emit('error', { message: 'Access denied to conversation' });
+          return;
+        }
+
+        // Add message to conversation
+        const messageData = {
+          conversation_id: conversationId,
+          role: message.role || 'user',
+          content: message.content,
+          model: message.model,
+          user_id: currentUserId,
+          tokens_used: message.tokens_used
+        };
+
+        const savedMessage = await collaborationService.addCollaborativeMessage(conversationId, messageData);
+
+        // Broadcast message to all users in the conversation
+        const messagePayload = {
+          message: savedMessage,
+          senderId: currentUserId,
+          timestamp: new Date().toISOString()
+        };
+
+        socket.to(`conversation:${conversationId}`).emit('message_received', messagePayload);
+        socket.emit('message_sent', messagePayload);
+      } catch (error) {
+        console.error('Error sending message:', error);
+        socket.emit('error', { message: 'Failed to send message' });
+      }
+    });
+
+    // Typing indicator
+    socket.on('typing_start', (data: { conversationId: string }) => {
+      if (!currentUserId || !data.conversationId) return;
+
+      socket.to(`conversation:${data.conversationId}`).emit('user_typing', {
+        userId: currentUserId,
+        conversationId: data.conversationId,
+        isTyping: true,
+        timestamp: new Date().toISOString()
       });
     });
-    
-    console.log('Server shutdown complete');
-    process.exit(0);
-  } catch (error) {
-    console.error('Error during shutdown:', error);
-    process.exit(1);
-  }
-};
 
-// Handle SIGTERM (graceful shutdown)
-process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received');
-  gracefulShutdown('SIGTERM');
-});
+    socket.on('typing_end', (data: { conversationId: string }) => {
+      if (!currentUserId || !data.conversationId) return;
 
-// Handle SIGINT (Ctrl+C)
-process.on('SIGINT', () => {
-  console.log('SIGINT signal received');
-  gracefulShutdown('SIGINT');
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  gracefulShutdown('UNCAUGHT_EXCEPTION');
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit - let Railway handle restarts
-});
-
-// Track startup phases and validation state
-const startupPhases = {
-  process_start: Date.now(),
-  server_listening: 0,
-  validation_start: 0,
-  validation_complete: 0,
-  ready_for_traffic: 0
-};
-
-// Validation state tracking
-let startupValidationComplete = false;
-let startupValidationResult = false;
-
-// Smart Readiness Endpoint - retained for backwards compatibility
-// Railway Circuit Breaker should be enabled to handle availability seamlessly
-app.get('/', (req, res) => {
-  const timestamp = new Date().toISOString();
-  const clientIP = req.ip || req.connection?.remoteAddress || 'unknown';
-  
-  console.log(`🔍 READINESS PROBE: ${timestamp}`);
-  console.log(`   Client: ${clientIP}`);
-  console.log(`   Method: ${req.method} ${req.path}`);
-  console.log(`   User-Agent: ${req.get('User-Agent') || 'N/A'}`);
-  console.log(`   Validation Status: ${startupValidationComplete ? 'COMPLETE' : 'PENDING'}`);
-  console.log(`   Validation Result: ${startupValidationComplete ? (startupValidationResult ? 'PASS' : 'FAIL') : 'N/A'}`);
-  
-  // If validation hasn't completed yet, return 503 (Service Unavailable)
-  if (!startupValidationComplete) {
-    console.log('⏳ READINESS PROBE: Validation not complete yet');
-    return res.status(503).json({
-      status: 'starting',
-      message: 'Server starting, validation in progress',
-      timestamp
-    });
-  }
-  
-  // If validation failed, return 503
-  if (!startupValidationResult) {
-    console.log('❌ READINESS PROBE: Validation failed');
-    return res.status(503).json({
-      status: 'unhealthy',
-      message: 'Server validation failed',
-      timestamp
-    });
-  }
-  
-  // All good - return 200
-  res.set({
-    'Content-Type': 'application/json',
-    'X-Health-Check': 'ok',
-    'X-Server-Status': 'ready',
-    'X-Timestamp': timestamp
-  });
-  
-  res.status(200).json({
-    status: 'ok',
-    message: 'Server is ready for traffic',
-    timestamp,
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    version: process.version
-  });
-});
-
-// Enhanced Startup Validation Function
-async function validateStartup(): Promise<boolean> {
-  try {
-    startupPhases.validation_start = Date.now();
-    console.log(`🔧 STARTING VALIDATION: +${startupPhases.validation_start - startupPhases.server_listening}ms`);
-    console.log('🔧 VALIDATING STARTUP DEPENDENCIES...');
-    
-    // Check personas
-    const personas = personaService.getAllPersonas();
-    console.log(`📚 Personas loaded: ${personas.length}`);
-    if (personas.length === 0) {
-      console.error('❌ No personas loaded');
-      startupValidationResult = false;
-      startupValidationComplete = true;
-      startupPhases.validation_complete = Date.now();
-      console.log(`❌ VALIDATION COMPLETE (FAILED): +${startupPhases.validation_complete - startupPhases.validation_start}ms`);
-      return false;
-    }
-    
-    // Check LLM adapter
-    const llmReady = llmAdapter.isReady();
-    console.log(`🤖 LLM Adapter ready: ${llmReady}`);
-    
-    // Check environment
-    const requiredEnv = ['LANGDB_API_KEY', 'LANGDB_GATEWAY_URL'];
-    const missingEnv = requiredEnv.filter(key => !process.env[key]);
-    if (missingEnv.length > 0) {
-      console.warn(`⚠️ Missing environment variables: ${missingEnv.join(', ')}`);
-    }
-    
-    console.log('✅ STARTUP VALIDATION COMPLETE');
-    startupValidationResult = true;
-    startupValidationComplete = true;
-    startupPhases.validation_complete = Date.now();
-    console.log(`✅ VALIDATION COMPLETE (SUCCESS): +${startupPhases.validation_complete - startupPhases.validation_start}ms`);
-    return true;
-    
-  } catch (error) {
-    console.error('❌ STARTUP VALIDATION ERROR:', error);
-    startupValidationResult = false;
-    startupValidationComplete = true;
-    startupPhases.validation_complete = Date.now();
-    console.log(`❌ VALIDATION COMPLETE (ERROR): +${startupPhases.validation_complete - startupPhases.validation_start}ms`);
-    return false;
-  }
-}
-
-// Initialize LLM Adapter
-const llmAdapter = new LangDBAdapter(
-  process.env.LANGDB_API_KEY || '',
-  process.env.LANGDB_GATEWAY_URL || 'https://api.us-east-1.langdb.ai/ad29a93e-567e-4cad-a816-fff3d4215d2b/v1',
-  parseInt(process.env.REQUEST_TIMEOUT || '30000')
-);
-
-// Initialize Chat Service
-const chatService = new ChatService(llmAdapter);
-
-// Socket.IO connection handling
-io.on('connection', (socket) => {
-  console.log(`🔌 Client connected: ${socket.id}`);
-  
-  // Handle user messages
-  socket.on('user_message', async (payload) => {
-    console.log('📨 RECEIVED user_message:', payload);
-    try {
-      await chatService.handleUserMessage(socket, payload);
-      console.log('✅ PROCESSED user_message successfully');
-    } catch (error) {
-      console.error('❌ ERROR handling user message:', error);
-      socket.emit('error', {
-        message: 'Failed to process message',
-        code: 'PROCESSING_ERROR'
+      socket.to(`conversation:${data.conversationId}`).emit('user_typing', {
+        userId: currentUserId,
+        conversationId: data.conversationId,
+        isTyping: false,
+        timestamp: new Date().toISOString()
       });
+    });
+
+    // Real-time cursor position (for collaborative editing)
+    socket.on('cursor_position', (data: { conversationId: string; position: any }) => {
+      if (!currentUserId || !data.conversationId) return;
+
+      socket.to(`conversation:${data.conversationId}`).emit('user_cursor', {
+        userId: currentUserId,
+        conversationId: data.conversationId,
+        position: data.position,
+        timestamp: new Date().toISOString()
+      });
+    });
+
+    // Handle disconnection
+    socket.on('disconnect', () => {
+      console.log('User disconnected:', socket.id);
+      
+      if (currentUserId) {
+        // Clean up user from all conversations
+        const userConversations = userRooms.get(currentUserId);
+        if (userConversations) {
+          userConversations.forEach(conversationId => {
+            socket.to(`conversation:${conversationId}`).emit('user_left', {
+              userId: currentUserId,
+              timestamp: new Date().toISOString()
+            });
+            if (currentUserId) {
+              conversationRooms.get(conversationId)?.delete(currentUserId);
+            }
+          });
+          userRooms.delete(currentUserId);
+        }
+      }
+    });
+  });
+
+  // Middleware
+  server.use(cors());
+  server.use(express.json());
+
+  // Authentication middleware
+  server.use((req, res, next) => {
+    // Simple auth check - in production, use proper JWT validation
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      // TODO: Validate JWT token properly
+      (req as any).user = { id: 'user-id-from-token' }; // Mock user for now
     }
+    next();
   });
-  
-  // Handle message cancellation
-  socket.on('cancel_message', async (payload) => {
-    try {
-      const { message_id } = payload;
-      await chatService.cancelRequest(message_id);
-      socket.emit('message_cancelled', { message_id });
-    } catch (error) {
-      console.error('Error cancelling message:', error);
-    }
+
+  // API Routes
+  server.use('/api/conversations', conversationsRouter);
+  server.use('/api/personas', personasRouter);
+  server.use('/api/models', modelsRouter);
+  server.use('/api/subscription', subscriptionRouter);
+  server.use('/api/search', searchRouter);
+  server.use('/api/teams', teamsRouter);
+  server.use('/api/analytics', analyticsRouter);
+  server.use('/api/collaboration', collaborationRouter);
+
+  // Health check endpoint
+  server.get('/api/health', (req, res) => {
+    res.status(200).json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      activeUsers: userRooms.size,
+      activeConversations: conversationRooms.size
+    });
   });
-  
-  // Handle disconnection
-  socket.on('disconnect', () => {
-    console.log(`🔌 Client disconnected: ${socket.id}`);
+
+  // Handle all other requests with Next.js
+  server.all('*', (req, res) => {
+    return handle(req, res);
   });
-});
 
-// Error handling middleware
-app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Express error:', err);
-  res.status(500).json({
-    error: 'Internal server error',
-    code: 'INTERNAL_ERROR'
+  const PORT = process.env.PORT || 3001;
+  httpServer.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📡 WebSocket server initialized with real-time collaboration`);
   });
-});
-
-// Start server with enhanced diagnostics
-const PORT = parseInt(process.env.PORT || '3001');
-// Remove HOST binding - Railway handles networking automatically
-
-console.log(`🚀 STARTING SERVER INITIALIZATION...`);
-console.log(`📍 Target Port: ${PORT}`);
-
-// Add startup timing diagnostics
-if (process.env.MODAL_STARTUP) {
-  console.log('🎯 MODAL STARTUP MODE DETECTED');
-  console.log(`⏰ Startup timestamp: ${new Date().toISOString()}`);
-  console.log(`🔢 Process PID: ${process.pid}`);
-  console.log(`👤 Process UID: ${process.getuid?.() || 'N/A'}`);
-}
-
-// Now listen immediately - Railway will only expose port when 
-// container process writes to stdout, stderr, or /tmp/app-initialized
-server.listen(PORT, async () => {
-  console.log(`✅ SERVER SUCCESSFULLY RUNNING ON PORT ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`📊 LLM Adapter: ${llmAdapter.isReady() ? 'READY' : 'NOT READY'}`);
-  
-  // Run startup validation
-  console.log('🔧 Running startup validation...');
-  const validationResult = await validateStartup();
-  console.log(`🔧 Startup validation result: ${validationResult ? 'PASS' : 'FAIL'}`);
-  
-  // Add memory usage logging periodically
-  setInterval(() => {
-    const memoryUsage = process.memoryUsage();
-    console.log(`Memory usage: ${JSON.stringify(memoryUsage)}`);
-    
-    // Warn if memory usage is high
-    if (memoryUsage.rss > 500 * 1024 * 1024) { // 500MB
-      console.warn('High memory usage detected');
-    }
-  }, 30000); // Log every 30 seconds
 });
