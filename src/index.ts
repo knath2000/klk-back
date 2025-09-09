@@ -27,12 +27,15 @@ const httpServer = http.createServer(server);
 // Initialize Socket.IO with enhanced configuration
 const io = new Server(httpServer, {
   cors: {
-    origin: ["https://klk-front.vercel.app"],
+    origin: ["https://klk-front.vercel.app", "http://localhost:3000"],
     methods: ["GET", "POST"],
     credentials: true
   },
   transports: ['websocket', 'polling'],
-  upgradeTimeout: 10000
+  upgradeTimeout: 10000,
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  maxHttpBufferSize: 1e6
 });
 
 // Store active users and their conversations
