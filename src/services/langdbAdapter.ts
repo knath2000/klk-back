@@ -192,6 +192,58 @@ export class LangDBAdapter extends BaseLLMAdapter {
     }
   }
 
+  /**
+   * Translator mode: Generate structured JSON output for translation queries
+   * @param text The text to translate
+   * @param sourceLang Source language (e.g., 'es')
+   * @param targetLang Target language (e.g., 'en')
+   * @param context Optional regional context (e.g., 'mex' for Mexican Spanish)
+   * @returns Promise resolving to structured translation JSON
+   */
+  async translateStructured(
+    text: string,
+    sourceLang: string,
+    targetLang: string,
+    context?: string
+  ): Promise<any> {
+    const systemPrompt = `You are a precise Spanish-English translator. Output ONLY JSON: {
+  "definitions": [{"meaning": "string", "pos": "noun|verb|adj|adv", "usage": "formal|informal|slang"}],
+  "examples": [{"es": "Spanish example", "en": "English example", "context": "usage context"}],
+  "conjugations": {"present": ["yo form", "tú form", ...], "past": [...], ...},
+  "audio": {"ipa": "phonetic", "suggestions": ["audio file suggestions"]},
+  "related": {"synonyms": ["syn1", "syn2"], "antonyms": ["ant1", "ant2"]}
+}. Use regional variants if context provided.`;
+
+    const userPrompt = `Translate "${text}" from ${sourceLang} to ${targetLang}${context ? ` with ${context} regional context` : ''}.`;
+
+    const messages: LLMMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ];
+
+    const options: LLMOptions = {
+      model: 'gpt-4', // Use GPT-4 for better translation quality
+      timeout: 30000,
+      requestId: `translate_${Date.now()}`
+    };
+
+    const response = await this.fetchCompletion(messages, options);
+
+    try {
+      return JSON.parse(response);
+    } catch (error) {
+      console.error('Failed to parse translator JSON response:', error);
+      // Return fallback structure
+      return {
+        definitions: [{ meaning: 'Translation unavailable', pos: 'unknown', usage: 'general' }],
+        examples: [],
+        conjugations: {},
+        audio: { ipa: '', suggestions: [] },
+        related: { synonyms: [], antonyms: [] }
+      };
+    }
+  }
+
   async cancel(requestId: string): Promise<void> {
     const controller = this.activeRequests.get(requestId);
     const streamResources = this.activeStreams.get(requestId);

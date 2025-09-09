@@ -1,6 +1,7 @@
 import { Server, Socket } from 'socket.io';
 import { collaborationService } from './collaborationService';
 import { conversationService } from './conversationService';
+import { translationService } from './translationService';
 
 interface WebSocketUser {
   userId: string;

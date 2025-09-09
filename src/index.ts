@@ -13,6 +13,7 @@ import searchRouter from './routes/search';
 import teamsRouter from './routes/teams';
 import analyticsRouter from './routes/analytics';
 import collaborationRouter from './routes/collaboration';
+import translateRouter from './routes/translate';
 
 // Import services
 import { getSupabase } from './services/db';
@@ -26,11 +27,12 @@ const httpServer = http.createServer(server);
 // Initialize Socket.IO with enhanced configuration
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.NEXT_PUBLIC_FRONTEND_URL || "http://localhost:3000",
+    origin: ["https://klk-front.vercel.app"],
     methods: ["GET", "POST"],
     credentials: true
   },
-  transports: ['websocket', 'polling']
+  transports: ['websocket', 'polling'],
+  upgradeTimeout: 10000
 });
 
 // Store active users and their conversations
@@ -242,6 +244,7 @@ server.use('/api/search', searchRouter);
 server.use('/api/teams', teamsRouter);
 server.use('/api/analytics', analyticsRouter);
 server.use('/api/collaboration', collaborationRouter);
+server.use('/api/translate', translateRouter);
 
 // Health check endpoint
 server.get('/api/health', (req, res) => {
