@@ -37,6 +37,45 @@ class WebSocketService {
         // Logic to re-join from userRooms map can be added here
       });
 
+      // Add transport-aware translation request handling
+      socket.on('translation_request', async (data) => {
+        console.log('Received translation_request:', data);
+        const transport = socket.conn?.transport?.name || 'unknown';
+        console.log('Translation request transport:', transport);
+
+        try {
+          // Proceed with streaming if websocket
+          if (transport === 'websocket') {
+            // Use the translation service's translate method
+            const result = await translationService.translate({
+              text: data.query,
+              sourceLang: data.language || 'en',
+              targetLang: 'es',
+              context: data.context,
+              userId: data.userId
+            });
+
+            // Emit streaming results
+            socket.emit('translation_delta', result);
+            socket.emit('translation_final', result);
+          } else {
+            // Fallback to polling-friendly handling
+            console.log('Using polling transport for translation');
+            // Emit fallback event or queue for polling
+            socket.emit('translation_fallback', { data, transport });
+          }
+        } catch (err) {
+          console.error('Translation request error:', err);
+          const errorMessage = err instanceof Error ? err.message : 'Unknown translation error';
+          socket.emit('translation_error', { message: errorMessage, retry: true });
+        }
+      });
+
+      // Add general error handler for connection issues
+      this.io.engine.on('connection_error', (err) => {
+        console.error('Socket.IO engine connection error:', err);
+      });
+
       // User authentication
       socket.on('authenticate', (userId: string) => {
         this.users.set(socket.id, {
@@ -192,16 +231,17 @@ class WebSocketService {
         });
       });
 
-      // Handle disconnection
-      socket.on('disconnect', () => {
-        console.log('User disconnected:', socket.id);
-        
+      // Handle disconnection with enhanced logging
+      socket.on('disconnect', (reason) => {
+        const transport = socket.conn?.transport?.name || 'unknown';
+        console.log('🔌 WebSocket DISCONNECTED:', reason, 'transport:', transport, 'at', new Date().toISOString());
+
         const user = this.users.get(socket.id);
         if (user) {
           // Leave all rooms
           user.rooms.forEach(conversationId => {
             socket.leave(conversationId);
-            
+
             // Remove user from conversation room tracking
             const room = this.conversationRooms.get(conversationId);
             if (room) {
@@ -215,7 +255,7 @@ class WebSocketService {
               timestamp: new Date().toISOString()
             });
           });
-          
+
           // Remove user from tracking
           this.users.delete(socket.id);
         }
