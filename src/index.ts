@@ -24,18 +24,25 @@ dotenv.config();
 const server = express();
 const httpServer = http.createServer(server);
 
-// Initialize Socket.IO with enhanced configuration
+// Initialize Socket.IO with enhanced configuration for Railway proxy
 const io = new Server(httpServer, {
+  path: '/socket.io', // Explicit path to avoid proxy conflicts
   cors: {
-    origin: ["https://klk-front.vercel.app", "http://localhost:3000"],
+    origin: [
+      "https://klk-front.vercel.app",
+      "https://klk-front.vercel.app/translate", // Specific for tab
+      "http://localhost:3000"
+    ],
     methods: ["GET", "POST"],
-    credentials: true
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"]
   },
   transports: ['websocket', 'polling'],
-  upgradeTimeout: 10000,
-  pingTimeout: 60000,
-  pingInterval: 25000,
-  maxHttpBufferSize: 1e6
+  upgradeTimeout: 20000, // Increased for Railway proxy
+  pingTimeout: 120000, // Doubled for intermittent reconnects
+  pingInterval: 30000,
+  maxHttpBufferSize: 1e6,
+  allowEIO3: true // Fallback for version mismatches
 });
 
 // Store active users and their conversations
@@ -223,8 +230,20 @@ io.on('connection', (socket) => {
   });
 });
 
-// Middleware
-server.use(cors());
+// Enhanced CORS middleware for HTTP (affects polling fallback)
+server.use(cors({
+  origin: [
+    "https://klk-front.vercel.app",
+    "http://localhost:3000"
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// Add OPTIONS handler for preflight
+server.options('*', cors());
+
 server.use(express.json());
 
 // Authentication middleware
@@ -263,4 +282,14 @@ const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 WebSocket server initialized with real-time collaboration`);
+});
+
+// Graceful shutdown for Railway
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  io.close(() => {
+    httpServer.close(() => {
+      process.exit(0);
+    });
+  });
 });

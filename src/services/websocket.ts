@@ -23,6 +23,20 @@ class WebSocketService {
     this.io.on('connection', (socket) => {
       console.log('User connected:', socket.id);
 
+      // Add error handling for reconnects
+      socket.on('connect_error', (err) => {
+        console.error('Socket.IO connect error:', err.message);
+        // Emit to client for retry
+        socket.emit('reconnect_attempt', { delay: 1000 });
+      });
+
+      // Add reconnect event handler
+      socket.on('reconnect', () => {
+        console.log('Client reconnected:', socket.id);
+        // Re-join previous rooms if stored
+        // Logic to re-join from userRooms map can be added here
+      });
+
       // User authentication
       socket.on('authenticate', (userId: string) => {
         this.users.set(socket.id, {

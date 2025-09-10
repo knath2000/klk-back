@@ -22,14 +22,25 @@ const collaborationService_1 = require("./services/collaborationService");
 dotenv_1.default.config();
 const server = (0, express_1.default)();
 const httpServer = http_1.default.createServer(server);
-// Initialize Socket.IO with enhanced configuration
+// Initialize Socket.IO with enhanced configuration for Railway proxy
 const io = new socket_io_1.Server(httpServer, {
+    path: '/socket.io', // Explicit path to avoid proxy conflicts
     cors: {
-        origin: process.env.NEXT_PUBLIC_FRONTEND_URL || "http://localhost:3000",
+        origin: [
+            "https://klk-front.vercel.app",
+            "https://klk-front.vercel.app/translate", // Specific for tab
+            "http://localhost:3000"
+        ],
         methods: ["GET", "POST"],
-        credentials: true
+        credentials: true,
+        allowedHeaders: ["Content-Type", "Authorization"]
     },
-    transports: ['websocket', 'polling']
+    transports: ['websocket', 'polling'],
+    upgradeTimeout: 20000, // Increased for Railway proxy
+    pingTimeout: 120000, // Doubled for intermittent reconnects
+    pingInterval: 30000,
+    maxHttpBufferSize: 1e6,
+    allowEIO3: true // Fallback for version mismatches
 });
 // Store active users and their conversations
 const userRooms = new Map(); // userId -> Set of conversationIds
@@ -191,8 +202,18 @@ io.on('connection', (socket) => {
         }
     });
 });
-// Middleware
-server.use((0, cors_1.default)());
+// Enhanced CORS middleware for HTTP (affects polling fallback)
+server.use((0, cors_1.default)({
+    origin: [
+        "https://klk-front.vercel.app",
+        "http://localhost:3000"
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+// Add OPTIONS handler for preflight
+server.options('*', (0, cors_1.default)());
 server.use(express_1.default.json());
 // Authentication middleware
 server.use((req, res, next) => {
@@ -227,5 +248,14 @@ const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📡 WebSocket server initialized with real-time collaboration`);
+});
+// Graceful shutdown for Railway
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down gracefully');
+    io.close(() => {
+        httpServer.close(() => {
+            process.exit(0);
+        });
+    });
 });
 //# sourceMappingURL=index.js.map
