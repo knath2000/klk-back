@@ -34,7 +34,7 @@ class WebSocketService {
 
       // Add catch-all event handler for debugging unhandled events
       socket.onAny((event, ...args) => {
-        if (!['connect', 'disconnect', 'ping', 'pong'].includes(event)) {
+        if (!['connect', 'disconnect', 'ping', 'pong', 'translation_request', 'user_message'].includes(event)) {
           console.log('🔍 UNHANDLED EVENT:', event, 'from', socket.id, 'args:', args.length > 0 ? JSON.stringify(args[0]).substring(0, 200) : 'no args');
         }
       });

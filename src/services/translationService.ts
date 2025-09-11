@@ -81,7 +81,7 @@ export class TranslationService {
       console.log('📤 Calling LangDB for translation:', { text: request.text, sourceLang: request.sourceLang, targetLang: request.targetLang });
 
       // Call LangDB with timeout
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('LangDB timeout')), 30000));
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('LangDB timeout')), 120000)); // Increased to 120 seconds for gpt-5-mini
       const result = await Promise.race([
         this.langdbAdapter.translateStructured(
           request.text,
