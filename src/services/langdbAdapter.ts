@@ -278,7 +278,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
     ];
 
     const options: LLMOptions = {
-      model: 'gpt-4', // Use GPT-4 for better translation quality
+      model: 'gpt-4o-mini', // Use same model as chat for consistency
       timeout: 30000,
       requestId: `translate_${Date.now()}`
     };
