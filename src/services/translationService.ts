@@ -13,7 +13,8 @@ export interface TranslationRequest {
 
 export interface TranslationResponse {
   definitions: Array<{
-    meaning: string;
+    text?: string; // For frontend compatibility
+    meaning?: string; // For backend compatibility
     pos: string;
     usage: string;
   }>;
@@ -108,7 +109,14 @@ export class TranslationService {
 
       // Always return fallback to prevent frontend crash
       const fallback = {
-        definitions: [{ meaning: `Error: "${request.text}" (service unavailable)`, pos: 'unknown', usage: 'error' }],
+        definitions: [
+          {
+            text: `Error: "${request.text}" (service unavailable)`, // Match frontend 'text' field
+            meaning: `Error: "${request.text}" (service unavailable)`, // Match backend 'meaning' field
+            pos: 'unknown',
+            usage: 'error'
+          }
+        ],
         examples: [],
         conjugations: {},
         audio: { ipa: '', suggestions: [] },

@@ -7,6 +7,19 @@ export class LangDBAdapter extends BaseLLMAdapter {
   private readonly MAX_RETRIES = 3;
   private readonly RETRY_DELAY = 1000;
 
+  constructor(apiKey: string, baseUrl: string) {
+    super(apiKey, baseUrl);
+
+    if (!apiKey) {
+      throw new Error('LANGDB_API_KEY is required for LangDBAdapter');
+    }
+    if (!baseUrl) {
+      throw new Error('LANGDB_BASE_URL is required for LangDBAdapter');
+    }
+
+    console.log('LangDBAdapter initialized with baseUrl:', baseUrl);
+  }
+
   async *streamCompletion(
     messages: LLMMessage[],
     options: LLMOptions
@@ -154,7 +167,14 @@ export class LangDBAdapter extends BaseLLMAdapter {
 
     for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
       try {
-        console.log(`LangDB fetch attempt ${attempt}/${this.MAX_RETRIES} for ${requestId}: ${this.baseUrl}/chat/completions`);
+        console.log(`🔄 LangDB fetch attempt ${attempt}/${this.MAX_RETRIES} for ${requestId}: ${this.baseUrl}/chat/completions`);
+
+        // Log full config for debugging
+        console.log('Fetch config:', {
+          url: `${this.baseUrl}/chat/completions`,
+          headers: { 'Authorization': `Bearer ${this.apiKey ? '[REDACTED]' : 'MISSING'}` },
+          bodyLength: JSON.stringify({ model: options.model, messages }).length
+        });
 
         // Add timeout to prevent hanging requests
         const timeoutId = setTimeout(() => {
@@ -183,7 +203,12 @@ export class LangDBAdapter extends BaseLLMAdapter {
         if (!response.ok) {
           const errorText = await response.text();
           lastError = new Error(`LangDB API error: ${response.status} ${errorText}`);
-          console.error(`Attempt ${attempt} failed:`, lastError.message);
+          console.error(`❌ Attempt ${attempt} failed:`, lastError.message);
+          console.error('Response details:', {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText
+          });
           if (attempt < this.MAX_RETRIES) {
             await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * attempt));
             continue;
@@ -192,11 +217,16 @@ export class LangDBAdapter extends BaseLLMAdapter {
         }
 
         const data: any = await response.json();
-        console.log(`✅ LangDB fetch success on attempt ${attempt} for ${requestId}:`, data.choices?.[0]?.message?.content?.substring(0, 100) + '...');
+        console.log(`✅ LangDB fetch success on attempt ${attempt} for ${requestId}: keys: ${Object.keys(data)}`);
         return data.choices?.[0]?.message?.content || '';
       } catch (error: any) {
         lastError = error;
-        console.error(`Attempt ${attempt} failed for ${requestId}:`, error.message);
+        console.error(`❌ LangDB fetch attempt ${attempt} failed for ${requestId}:`, {
+          message: error.message,
+          name: error.name,
+          code: error.code, // e.g., 'UND_ERR_CONNECTING' for network
+          stack: error.stack
+        });
         if (attempt < this.MAX_RETRIES) {
           await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * attempt));
           continue;
@@ -254,14 +284,18 @@ export class LangDBAdapter extends BaseLLMAdapter {
 
       try {
         const parsed = JSON.parse(response);
-        if (parsed.choices && Array.isArray(parsed.choices) && parsed.choices[0]?.message?.content) {
-          return JSON.parse(parsed.choices[0].message.content); // Parse inner JSON
-        } else {
-          console.warn('Invalid LangDB response structure:', parsed);
-          return this.getFallbackTranslation(text, sourceLang, targetLang);
+        // LangDB returns { choices: [{ message: { content: JSON_STRING } }] } – parse inner content as JSON
+        const innerContent = parsed.choices?.[0]?.message?.content;
+        if (innerContent) {
+          const structured = JSON.parse(innerContent);
+          if (structured.definitions && Array.isArray(structured.definitions)) {
+            return structured;
+          }
         }
+        console.warn('Invalid LangDB structure - using fallback');
+        return this.getFallbackTranslation(text, sourceLang, targetLang);
       } catch (parseError) {
-        console.error('JSON parse error in translateStructured:', parseError, 'Raw response:', response);
+        console.error('JSON parse error in translateStructured:', parseError, 'Raw response:', response.substring(0, 500) + (response.length > 500 ? '...' : ''));
         return this.getFallbackTranslation(text, sourceLang, targetLang);
       }
     } catch (error: any) {
@@ -273,7 +307,13 @@ export class LangDBAdapter extends BaseLLMAdapter {
   private getFallbackTranslation(text: string, sourceLang: string, targetLang: string): any {
     console.log('🔄 Using fallback translation for:', text, 'due to LangDB failure');
     return {
-      definitions: [{ meaning: `Fallback: "${text}" (service unavailable)`, pos: 'unknown', usage: 'general' }],
+      definitions: [
+        {
+          text: `Fallback: "${text}" (service unavailable)`, // Use 'text' to match frontend expectation (not 'meaning')
+          pos: 'unknown',
+          usage: 'general'
+        }
+      ],
       examples: [{ es: text, en: 'Translation service temporarily unavailable', context: 'error' }],
       conjugations: {},
       audio: { ipa: '', suggestions: [] },

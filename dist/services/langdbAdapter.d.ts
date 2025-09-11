@@ -5,6 +5,7 @@ export declare class LangDBAdapter extends BaseLLMAdapter {
     private activeStreams;
     private readonly MAX_RETRIES;
     private readonly RETRY_DELAY;
+    constructor(apiKey: string, baseUrl: string);
     streamCompletion(messages: LLMMessage[], options: LLMOptions): AsyncIterable<DeltaChunk>;
     fetchCompletion(messages: LLMMessage[], options: LLMOptions): Promise<string>;
     /**
