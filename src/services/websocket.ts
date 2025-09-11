@@ -1,4 +1,7 @@
 import { Server, Socket } from 'socket.io';
+import { LLMMessage, LLMOptions } from '../types';
+import { OpenRouterAdapter } from './openrouterAdapter';
+import { personaService } from './personaService';
 import { collaborationService } from './collaborationService';
 import { conversationService } from './conversationService';
 import { translationService } from './translationService';
@@ -121,6 +124,114 @@ class WebSocketService {
           // Metrics: Increment error counter
           this.metrics.errors.inc();
           socket.emit('translation_error', { message: error.message || 'Translation failed' });
+        }
+      });
+
+      // New user_message handler for chat messages
+      socket.on('user_message', async (data: {
+        message: string;
+        selected_country_key: string;
+        client_ts: number;
+        message_id: string;
+      }) => {
+        console.log('📨 Received user_message:', { ...data, id: socket.id });
+        const transport = socket.conn?.transport?.name || 'unknown';
+        console.log('Transport for user_message:', transport);
+
+        // Rate limiting (reuse existing logic)
+        const now = Date.now();
+        const userKey = socket.id;
+        const rateLimitData = this.rateLimitMap.get(userKey);
+        if (!rateLimitData) {
+          this.rateLimitMap.set(userKey, { count: 0, resetTime: now + 60000 });
+        }
+        const currentLimit = this.rateLimitMap.get(userKey)!;
+        if (currentLimit.count >= 5) { // 5 messages per minute for chat
+          socket.emit('error', { message: 'Rate limit exceeded. Please wait.' });
+          return;
+        }
+        currentLimit.count++;
+
+        // Metrics
+        this.metrics.requests.inc();
+
+        try {
+          if (!data.message.trim()) {
+            socket.emit('error', { message: 'Message cannot be empty' });
+            return;
+          }
+
+          if (!data.selected_country_key) {
+            socket.emit('error', { message: 'Please select a country first' });
+            return;
+          }
+
+          // Validate connection
+          if (!socket.connected) {
+            console.warn('user_message from disconnected socket:', socket.id);
+            socket.emit('error', { message: 'Connection lost; please retry' });
+            return;
+          }
+
+          // Fetch persona
+          const persona = await personaService.getPersona(data.selected_country_key);
+          if (!persona) {
+            socket.emit('error', { message: 'Invalid country selection' });
+            return;
+          }
+
+          // Prepare LLM messages
+          const messages: LLMMessage[] = [
+            { role: 'system', content: persona.prompt_text },
+            { role: 'user', content: data.message }
+          ];
+
+          // Use OpenRouter for chat (as per existing setup)
+          const openRouterAdapter = new OpenRouterAdapter(
+            process.env.OPENROUTER_API_KEY || '',
+            process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
+          );
+
+          const options: LLMOptions = {
+            model: 'gpt-4o-mini',
+            timeout: 30000,
+            requestId: data.message_id
+          };
+
+          // Stream response
+          const stream = openRouterAdapter.streamCompletion(messages, options);
+          let fullContent = '';
+
+          for await (const chunk of stream) {
+            if (chunk.deltaText) {
+              fullContent += chunk.deltaText;
+              socket.emit('assistant_delta', {
+                message_id: data.message_id,
+                chunk: chunk.deltaText,
+                index: fullContent.length,
+                total: null // Unknown total for streaming
+              });
+            }
+          }
+
+          // Emit final message
+          socket.emit('assistant_final', {
+            message_id: data.message_id,
+            final_content: fullContent,
+            timestamp: new Date().toISOString()
+          });
+
+          // Metrics
+          this.metrics.successes.inc();
+          console.log('✅ User message processed for:', data.message_id, 'content length:', fullContent.length);
+
+        } catch (error: any) {
+          console.error('❌ User message processing error:', error);
+          this.metrics.errors.inc();
+          socket.emit('error', {
+            message: 'Sorry, I encountered an error processing your message. Please try again.',
+            details: error.message
+          });
         }
       });
 
