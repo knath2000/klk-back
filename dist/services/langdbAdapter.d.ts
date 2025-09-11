@@ -1,6 +1,7 @@
 import { BaseLLMAdapter } from './llmAdapter';
 import { LLMMessage, DeltaChunk, LLMOptions } from '../types';
 export declare class LangDBAdapter extends BaseLLMAdapter {
+    private model;
     private activeRequests;
     private activeStreams;
     private readonly MAX_RETRIES;

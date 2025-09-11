@@ -15,7 +15,13 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
         if (!baseUrl) {
             throw new Error('LANGDB_BASE_URL is required for LangDBAdapter');
         }
-        console.log('LangDBAdapter initialized with baseUrl:', baseUrl);
+        let model = process.env.LANGDB_MODEL || 'gpt-4o-mini';
+        if (!['gpt-4o-mini', 'llama-3.1-8b', 'openai/gpt-4o-mini'].includes(model)) {
+            console.warn(`Invalid LANGDB_MODEL "${model}"; defaulting to "gpt-4o-mini" (verify LangDB support)`);
+            model = 'gpt-4o-mini';
+        }
+        this.model = model; // Assume BaseLLMAdapter has this.model; if not, add private model: string;
+        console.log('LangDBAdapter initialized with tenant URL:', baseUrl, 'model:', model);
     }
     async *streamCompletion(messages, options) {
         const controller = new AbortController();
@@ -175,13 +181,14 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
                 });
                 clearTimeout(timeoutId);
                 if (!response.ok) {
-                    const errorText = await response.text();
-                    lastError = new Error(`LangDB API error: ${response.status} ${errorText}`);
+                    const fullBody = await response.text();
+                    console.error('Full LangDB response body on failure (attempt ${attempt}):', fullBody.substring(0, 1000)); // Log full body
+                    lastError = new Error(`LangDB API error: ${response.status} - ${fullBody || 'Empty body'}`);
                     console.error(`❌ Attempt ${attempt} failed:`, lastError.message);
                     console.error('Response details:', {
                         status: response.status,
                         statusText: response.statusText,
-                        body: errorText
+                        body: fullBody
                     });
                     if (attempt < this.MAX_RETRIES) {
                         await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * attempt));
