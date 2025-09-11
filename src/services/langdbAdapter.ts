@@ -50,6 +50,17 @@ export class LangDBAdapter extends BaseLLMAdapter {
       const isGpt5Mini = options.model === 'openai/gpt-5-mini';
       const maxTokensParam = isGpt5Mini ? 'max_completion_tokens' : 'max_tokens';
 
+      const bodyParams = {
+        model: options.model,
+        messages,
+        stream: true,
+        [maxTokensParam]: 1000,
+      };
+
+      if (!isGpt5Mini) {
+        bodyParams.temperature = 0.7;
+      }
+
       // Use native fetch (Node.js 18+)
       response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
@@ -57,13 +68,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
           'Authorization': `Bearer ${this.apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          model: options.model,
-          messages,
-          stream: true,
-          [maxTokensParam]: 1000,
-          temperature: 0.7,
-        }),
+        body: JSON.stringify(bodyParams),
         signal: controller.signal,
       });
 
@@ -198,19 +203,24 @@ export class LangDBAdapter extends BaseLLMAdapter {
         const isGpt5Mini = options.model === 'openai/gpt-5-mini';
         const maxTokensParam = isGpt5Mini ? 'max_completion_tokens' : 'max_tokens';
 
+        const bodyParams = {
+          model: options.model,
+          messages,
+          stream: false,
+          [maxTokensParam]: 1000,
+        };
+
+        if (!isGpt5Mini) {
+          bodyParams.temperature = 0.7;
+        }
+
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            model: options.model,
-            messages,
-            stream: false,
-            [maxTokensParam]: 1000,
-            temperature: 0.7,
-          }),
+          body: JSON.stringify(bodyParams),
           signal: controller.signal,
         });
 
