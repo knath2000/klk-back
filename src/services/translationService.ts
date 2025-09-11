@@ -105,7 +105,17 @@ export class TranslationService {
       });
       // Metrics: Increment error counter
       this.metrics.errors.inc();
-      throw new Error('Translation failed. Please try again.');
+
+      // Always return fallback to prevent frontend crash
+      const fallback = {
+        definitions: [{ meaning: `Error: "${request.text}" (service unavailable)`, pos: 'unknown', usage: 'error' }],
+        examples: [],
+        conjugations: {},
+        audio: { ipa: '', suggestions: [] },
+        related: { synonyms: [], antonyms: [] }
+      };
+      console.log('🔄 TranslationService returning fallback for', request.text);
+      return fallback;
     }
   }
 

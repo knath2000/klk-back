@@ -7,6 +7,8 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
         super(...arguments);
         this.activeRequests = new Map();
         this.activeStreams = new Map();
+        this.MAX_RETRIES = 3;
+        this.RETRY_DELAY = 1000;
     }
     async *streamCompletion(messages, options) {
         const controller = new AbortController();
@@ -124,57 +126,69 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
         }
     }
     async fetchCompletion(messages, options) {
+        // Validate environment variables
+        if (!this.apiKey) {
+            throw new Error('LANGDB_API_KEY environment variable is required');
+        }
+        if (!this.baseUrl) {
+            throw new Error('LANGDB_BASE_URL environment variable is required');
+        }
         const controller = new AbortController();
         const requestId = options.requestId || `req_${Date.now()}`;
         this.activeRequests.set(requestId, controller);
-        try {
-            // Add timeout to prevent hanging requests
-            const timeoutId = setTimeout(() => {
-                console.warn(`Request ${requestId} timed out, aborting...`);
-                controller.abort();
-            }, options.timeout || 30000); // 30 second default timeout
-            const response = await fetch(`${this.baseUrl}/chat/completions`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.apiKey}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model: options.model,
-                    messages,
-                    stream: false,
-                    max_tokens: 1000,
-                    temperature: 0.7,
-                }),
-                signal: controller.signal,
-            });
-            clearTimeout(timeoutId);
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`LangDB API error: ${response.status} ${errorText}`);
-            }
-            const data = await response.json();
-            return data.choices?.[0]?.message?.content || '';
-        }
-        catch (error) {
-            if (error.name === 'AbortError' || error.message.includes('aborted')) {
-                console.log(`Request ${requestId} was cancelled`);
-                return '';
-            }
-            else {
-                console.error(`Completion error for ${requestId}:`, {
-                    error: error.message,
-                    stack: error.stack,
-                    timestamp: new Date().toISOString()
+        let lastError = null;
+        for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+            try {
+                console.log(`LangDB fetch attempt ${attempt}/${this.MAX_RETRIES} for ${requestId}: ${this.baseUrl}/chat/completions`);
+                // Add timeout to prevent hanging requests
+                const timeoutId = setTimeout(() => {
+                    console.warn(`Request ${requestId} attempt ${attempt} timed out, aborting...`);
+                    controller.abort();
+                }, options.timeout || 30000);
+                const response = await fetch(`${this.baseUrl}/chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${this.apiKey}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        model: options.model,
+                        messages,
+                        stream: false,
+                        max_tokens: 1000,
+                        temperature: 0.7,
+                    }),
+                    signal: controller.signal,
                 });
-                // On error, return empty string so callers always get a string
-                return '';
+                clearTimeout(timeoutId);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    lastError = new Error(`LangDB API error: ${response.status} ${errorText}`);
+                    console.error(`Attempt ${attempt} failed:`, lastError.message);
+                    if (attempt < this.MAX_RETRIES) {
+                        await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * attempt));
+                        continue;
+                    }
+                    throw lastError;
+                }
+                const data = await response.json();
+                console.log(`✅ LangDB fetch success on attempt ${attempt} for ${requestId}:`, data.choices?.[0]?.message?.content?.substring(0, 100) + '...');
+                return data.choices?.[0]?.message?.content || '';
+            }
+            catch (error) {
+                lastError = error;
+                console.error(`Attempt ${attempt} failed for ${requestId}:`, error.message);
+                if (attempt < this.MAX_RETRIES) {
+                    await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * attempt));
+                    continue;
+                }
+                throw lastError;
+            }
+            finally {
+                this.activeRequests.delete(requestId);
             }
         }
-        finally {
-            // Ensure cleanup happens even if error occurs
-            this.activeRequests.delete(requestId);
-        }
+        return '';
     }
     /**
      * Translator mode: Generate structured JSON output for translation queries
@@ -202,21 +216,41 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             timeout: 30000,
             requestId: `translate_${Date.now()}`
         };
-        const response = await this.fetchCompletion(messages, options);
         try {
-            return JSON.parse(response);
+            const response = await this.fetchCompletion(messages, options);
+            if (!response || response.trim() === '') {
+                console.warn('Empty response from LangDB for translation:', text);
+                return this.getFallbackTranslation(text, sourceLang, targetLang);
+            }
+            try {
+                const parsed = JSON.parse(response);
+                if (parsed.choices && Array.isArray(parsed.choices) && parsed.choices[0]?.message?.content) {
+                    return JSON.parse(parsed.choices[0].message.content); // Parse inner JSON
+                }
+                else {
+                    console.warn('Invalid LangDB response structure:', parsed);
+                    return this.getFallbackTranslation(text, sourceLang, targetLang);
+                }
+            }
+            catch (parseError) {
+                console.error('JSON parse error in translateStructured:', parseError, 'Raw response:', response);
+                return this.getFallbackTranslation(text, sourceLang, targetLang);
+            }
         }
         catch (error) {
-            console.error('Failed to parse translator JSON response:', error);
-            // Return fallback structure
-            return {
-                definitions: [{ meaning: 'Translation unavailable', pos: 'unknown', usage: 'general' }],
-                examples: [],
-                conjugations: {},
-                audio: { ipa: '', suggestions: [] },
-                related: { synonyms: [], antonyms: [] }
-            };
+            console.error('Translation fetch error:', error.message);
+            return this.getFallbackTranslation(text, sourceLang, targetLang);
         }
+    }
+    getFallbackTranslation(text, sourceLang, targetLang) {
+        console.log('🔄 Using fallback translation for:', text, 'due to LangDB failure');
+        return {
+            definitions: [{ meaning: `Fallback: "${text}" (service unavailable)`, pos: 'unknown', usage: 'general' }],
+            examples: [{ es: text, en: 'Translation service temporarily unavailable', context: 'error' }],
+            conjugations: {},
+            audio: { ipa: '', suggestions: [] },
+            related: { synonyms: [], antonyms: [] }
+        };
     }
     async cancel(requestId) {
         const controller = this.activeRequests.get(requestId);

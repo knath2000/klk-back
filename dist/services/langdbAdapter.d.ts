@@ -3,6 +3,8 @@ import { LLMMessage, DeltaChunk, LLMOptions } from '../types';
 export declare class LangDBAdapter extends BaseLLMAdapter {
     private activeRequests;
     private activeStreams;
+    private readonly MAX_RETRIES;
+    private readonly RETRY_DELAY;
     streamCompletion(messages: LLMMessage[], options: LLMOptions): AsyncIterable<DeltaChunk>;
     fetchCompletion(messages: LLMMessage[], options: LLMOptions): Promise<string>;
     /**
@@ -14,6 +16,7 @@ export declare class LangDBAdapter extends BaseLLMAdapter {
      * @returns Promise resolving to structured translation JSON
      */
     translateStructured(text: string, sourceLang: string, targetLang: string, context?: string): Promise<any>;
+    private getFallbackTranslation;
     cancel(requestId: string): Promise<void>;
 }
 //# sourceMappingURL=langdbAdapter.d.ts.map
