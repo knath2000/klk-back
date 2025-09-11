@@ -1,6 +1,8 @@
 // ... existing code ...
 
+import { LLMMessage, LLMOptions } from '../types';
 import { LangDBAdapter } from './langdbAdapter';
+import { OpenRouterAdapter } from './openrouterAdapter';
 import { personaService } from './personaService';
 
 export interface TranslationRequest {
@@ -46,6 +48,9 @@ export class TranslationService {
 
   constructor(langdbAdapter: LangDBAdapter) {
     this.langdbAdapter = langdbAdapter;
+    // Log env vars to verify loading
+    console.log('TranslationService initialized with LANGDB_BASE_URL:', process.env.LANGDB_BASE_URL || 'DEFAULT (generic)');
+    console.log('LANGDB_MODEL:', process.env.LANGDB_MODEL || 'DEFAULT (gpt-4o-mini)');
   }
 
   async translate(request: TranslationRequest): Promise<TranslationResponse> {
@@ -62,18 +67,18 @@ export class TranslationService {
       return cached.data;
     }
 
+    // Get regional context if provided (declare outside try-catch)
+    let regionalContext = '';
+    if (request.context) {
+      const persona = await personaService.getPersona(request.context);
+      if (persona) {
+        regionalContext = persona.locale_hint || request.context;
+      }
+    }
+
     try {
       // Log before LangDB call
       console.log('📤 Calling LangDB for translation:', { text: request.text, sourceLang: request.sourceLang, targetLang: request.targetLang });
-
-      // Get regional context if provided
-      let regionalContext = '';
-      if (request.context) {
-        const persona = await personaService.getPersona(request.context);
-        if (persona) {
-          regionalContext = persona.locale_hint || request.context;
-        }
-      }
 
       // Call LangDB with timeout
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('LangDB timeout')), 30000));
@@ -96,34 +101,65 @@ export class TranslationService {
       this.metrics.successes.inc();
 
       return result;
-    } catch (error: any) {
-      console.error('❌ Translation service error for', request.text, ':', error.message);
-      // Log full error for debugging
-      console.error('Error details:', {
-        error: error.message,
-        stack: error.stack,
+    } catch (langdbError: any) {
+      console.error('❌ LangDB failed for', request.text, ':', langdbError.message);
+      console.error('LangDB error details:', {
+        error: langdbError.message,
+        cause: langdbError.cause,
+        stack: langdbError.stack,
         request: request
       });
       // Metrics: Increment error counter
       this.metrics.errors.inc();
 
-      // Always return fallback to prevent frontend crash
-      const fallback = {
-        definitions: [
-          {
-            text: `Error: "${request.text}" (service unavailable)`, // Match frontend 'text' field
-            meaning: `Error: "${request.text}" (service unavailable)`, // Match backend 'meaning' field
-            pos: 'unknown',
-            usage: 'error'
-          }
-        ],
-        examples: [],
-        conjugations: {},
-        audio: { ipa: '', suggestions: [] },
-        related: { synonyms: [], antonyms: [] }
-      };
-      console.log('🔄 TranslationService returning fallback for', request.text);
-      return fallback;
+      // Fallback to OpenRouter using general completion and parse
+      try {
+        console.log('🔄 LangDB failed, falling back to OpenRouter for', request.text);
+        const openRouterAdapter = new OpenRouterAdapter(process.env.OPENROUTER_API_KEY || '', process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1');
+        const systemPrompt = `You are a precise Spanish-English translator. Output ONLY JSON: {
+  "definitions": [{"meaning": "string", "pos": "noun|verb|adj|adv", "usage": "formal|informal|slang"}],
+  "examples": [{"es": "Spanish example", "en": "English example", "context": "usage context"}],
+  "conjugations": {"present": ["yo form", "tú form", ...], "past": [...]},
+  "audio": {"ipa": "phonetic", "suggestions": ["audio suggestions"]},
+  "related": {"synonyms": ["syn1"], "antonyms": ["ant1"]}
+}. Use regional variants if context provided.`;
+
+        const userPrompt = `Translate "${request.text}" from ${request.sourceLang} to ${request.targetLang}${regionalContext ? ` with ${regionalContext} context` : ''}.`;
+        const messages: LLMMessage[] = [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ];
+        const options: LLMOptions = {
+          model: 'gpt-4o-mini', // Use compatible model
+          timeout: 30000,
+          requestId: `fallback_${Date.now()}`
+        };
+        const rawResult = await openRouterAdapter.fetchCompletion(messages, options);
+        const fallbackResult = JSON.parse(rawResult);
+        console.log('✅ OpenRouter fallback success for:', request.text);
+        // Cache fallback result
+        this.cache.set(cacheKey, { data: fallbackResult, timestamp: Date.now() });
+        return fallbackResult;
+      } catch (fallbackError: any) {
+        console.error('❌ OpenRouter fallback also failed for', request.text, ':', fallbackError.message);
+        // Final fallback JSON
+        const finalFallback = {
+          definitions: [
+            {
+              text: `Error: "${request.text}" (both services unavailable)`,
+              meaning: `Error: "${request.text}" (both services unavailable)`,
+              pos: 'unknown',
+              usage: 'error'
+            }
+          ],
+          examples: [],
+          conjugations: {},
+          audio: { ipa: '', suggestions: [] },
+          related: { synonyms: [], antonyms: [] }
+        };
+        console.log('🔄 TranslationService returning final fallback for', request.text);
+        return finalFallback;
+      }
     }
   }
 
