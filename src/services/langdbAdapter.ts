@@ -46,6 +46,10 @@ export class LangDBAdapter extends BaseLLMAdapter {
         controller.abort();
       }, options.timeout || 30000); // Use same default as chat service
 
+      // Model-specific parameter mapping for gpt-5-mini
+      const isGpt5Mini = options.model === 'openai/gpt-5-mini';
+      const maxTokensParam = isGpt5Mini ? 'max_completion_tokens' : 'max_tokens';
+
       // Use native fetch (Node.js 18+)
       response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
@@ -57,7 +61,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
           model: options.model,
           messages,
           stream: true,
-          max_tokens: 1000,
+          [maxTokensParam]: 1000,
           temperature: 0.7,
         }),
         signal: controller.signal,
@@ -190,6 +194,10 @@ export class LangDBAdapter extends BaseLLMAdapter {
           controller.abort();
         }, options.timeout || 30000);
 
+        // Model-specific parameter mapping for gpt-5-mini
+        const isGpt5Mini = options.model === 'openai/gpt-5-mini';
+        const maxTokensParam = isGpt5Mini ? 'max_completion_tokens' : 'max_tokens';
+
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
           method: 'POST',
           headers: {
@@ -200,7 +208,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
             model: options.model,
             messages,
             stream: false,
-            max_tokens: 1000,
+            [maxTokensParam]: 1000,
             temperature: 0.7,
           }),
           signal: controller.signal,
