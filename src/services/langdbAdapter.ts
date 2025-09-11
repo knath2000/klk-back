@@ -278,7 +278,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
     ];
 
     const options: LLMOptions = {
-      model: 'gpt-4o-mini', // Use same model as chat for consistency
+      model: 'openai/gpt-5-mini', // Updated to use gpt-5-mini for translation (more advanced model for structured outputs)
       timeout: 30000,
       requestId: `translate_${Date.now()}`
     };
