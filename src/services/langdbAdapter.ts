@@ -291,20 +291,32 @@ export class LangDBAdapter extends BaseLLMAdapter {
         return this.getFallbackTranslation(text, sourceLang, targetLang);
       }
 
+      // Log raw response for debugging
+      console.log('Raw LangDB translation response:', response.substring(0, 500) + (response.length > 500 ? '...' : ''));
+
       try {
-        const parsed = JSON.parse(response);
-        // LangDB returns { choices: [{ message: { content: JSON_STRING } }] } – parse inner content as JSON
-        const innerContent = parsed.choices?.[0]?.message?.content;
-        if (innerContent) {
-          const structured = JSON.parse(innerContent);
-          if (structured.definitions && Array.isArray(structured.definitions)) {
-            return structured;
-          }
+        // Since we prompt for direct JSON output, parse the response content directly
+        const structured = JSON.parse(response.trim());
+
+        // Validate structure: must have definitions array and other expected keys
+        if (structured.definitions && Array.isArray(structured.definitions) &&
+            structured.examples && Array.isArray(structured.examples) &&
+            typeof structured.conjugations === 'object' &&
+            typeof structured.audio === 'object' &&
+            typeof structured.related === 'object') {
+          console.log('✅ Valid structured translation parsed from LangDB');
+          return structured;
+        } else {
+          console.warn('Invalid LangDB structure (missing expected keys or invalid types):', {
+            hasDefinitions: !!structured.definitions,
+            definitionsType: Array.isArray(structured.definitions) ? 'array' : typeof structured.definitions,
+            hasExamples: !!structured.examples,
+            // Add more validation logs as needed
+          });
+          return this.getFallbackTranslation(text, sourceLang, targetLang);
         }
-        console.warn('Invalid LangDB structure - using fallback');
-        return this.getFallbackTranslation(text, sourceLang, targetLang);
       } catch (parseError) {
-        console.error('JSON parse error in translateStructured:', parseError, 'Raw response:', response.substring(0, 500) + (response.length > 500 ? '...' : ''));
+        console.error('JSON parse error in translateStructured:', parseError instanceof Error ? parseError.message : String(parseError), 'Raw response:', response.substring(0, 500) + (response.length > 500 ? '...' : ''));
         return this.getFallbackTranslation(text, sourceLang, targetLang);
       }
     } catch (error: any) {
