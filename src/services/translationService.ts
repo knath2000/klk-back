@@ -37,6 +37,11 @@ export class TranslationService {
   private langdbAdapter: LangDBAdapter;
   private cache: Map<string, { data: TranslationResponse; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 1000 * 60 * 30; // 30 minutes
+  private metrics = {
+    requests: { count: 0, inc: () => this.metrics.requests.count++ },
+    successes: { count: 0, inc: () => this.metrics.successes.count++ },
+    errors: { count: 0, inc: () => this.metrics.errors.count++ }
+  };
 
   constructor(langdbAdapter: LangDBAdapter) {
     this.langdbAdapter = langdbAdapter;
@@ -44,6 +49,10 @@ export class TranslationService {
 
   async translate(request: TranslationRequest): Promise<TranslationResponse> {
     const cacheKey = this.generateCacheKey(request);
+    console.log('🔄 Processing translation for:', request.text, 'cacheKey:', cacheKey);
+
+    // Metrics: Increment request counter
+    this.metrics.requests.inc();
 
     // Check cache first
     const cached = this.cache.get(cacheKey);
@@ -53,6 +62,9 @@ export class TranslationService {
     }
 
     try {
+      // Log before LangDB call
+      console.log('📤 Calling LangDB for translation:', { text: request.text, sourceLang: request.sourceLang, targetLang: request.targetLang });
+
       // Get regional context if provided
       let regionalContext = '';
       if (request.context) {
@@ -62,20 +74,37 @@ export class TranslationService {
         }
       }
 
-      // Call LangDB translator
-      const result = await this.langdbAdapter.translateStructured(
-        request.text,
-        request.sourceLang,
-        request.targetLang,
-        regionalContext
-      );
+      // Call LangDB with timeout
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('LangDB timeout')), 30000));
+      const result = await Promise.race([
+        this.langdbAdapter.translateStructured(
+          request.text,
+          request.sourceLang,
+          request.targetLang,
+          regionalContext
+        ),
+        timeoutPromise
+      ]);
+
+      console.log('✅ LangDB response received for:', request.text);
 
       // Cache the result
       this.cache.set(cacheKey, { data: result, timestamp: Date.now() });
 
+      // Metrics: Increment success counter
+      this.metrics.successes.inc();
+
       return result;
-    } catch (error) {
-      console.error('Translation service error:', error);
+    } catch (error: any) {
+      console.error('❌ Translation service error for', request.text, ':', error.message);
+      // Log full error for debugging
+      console.error('Error details:', {
+        error: error.message,
+        stack: error.stack,
+        request: request
+      });
+      // Metrics: Increment error counter
+      this.metrics.errors.inc();
       throw new Error('Translation failed. Please try again.');
     }
   }
