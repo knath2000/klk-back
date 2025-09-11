@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.initializeWebSocket = initializeWebSocket;
-const openrouterAdapter_1 = require("./openrouterAdapter");
+const langdbAdapter_1 = require("./langdbAdapter");
 const personaService_1 = require("./personaService");
 const collaborationService_1 = require("./collaborationService");
 const conversationService_1 = require("./conversationService");
@@ -154,15 +154,15 @@ class WebSocketService {
                         { role: 'system', content: persona.prompt_text },
                         { role: 'user', content: data.message }
                     ];
-                    // Use OpenRouter for chat (as per existing setup)
-                    const openRouterAdapter = new openrouterAdapter_1.OpenRouterAdapter(process.env.OPENROUTER_API_KEY || '', process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1');
+                    // Use LangDB for chat
+                    const langdbAdapter = new langdbAdapter_1.LangDBAdapter(process.env.LANGDB_API_KEY || '', process.env.LANGDB_BASE_URL || 'https://api.langdb.ai/v1');
                     const options = {
                         model: 'gpt-4o-mini',
                         timeout: 30000,
                         requestId: data.message_id
                     };
                     // Stream response
-                    const stream = openRouterAdapter.streamCompletion(messages, options);
+                    const stream = langdbAdapter.streamCompletion(messages, options);
                     let fullContent = '';
                     for await (const chunk of stream) {
                         if (chunk.deltaText) {

@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import { LLMMessage, LLMOptions } from '../types';
-import { OpenRouterAdapter } from './openrouterAdapter';
+import { LangDBAdapter } from './langdbAdapter';
 import { personaService } from './personaService';
 import { collaborationService } from './collaborationService';
 import { conversationService } from './conversationService';
@@ -186,10 +186,10 @@ class WebSocketService {
             { role: 'user', content: data.message }
           ];
 
-          // Use OpenRouter for chat (as per existing setup)
-          const openRouterAdapter = new OpenRouterAdapter(
-            process.env.OPENROUTER_API_KEY || '',
-            process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
+          // Use LangDB for chat
+          const langdbAdapter = new LangDBAdapter(
+            process.env.LANGDB_API_KEY || '',
+            process.env.LANGDB_BASE_URL || 'https://api.langdb.ai/v1'
           );
 
           const options: LLMOptions = {
@@ -199,7 +199,7 @@ class WebSocketService {
           };
 
           // Stream response
-          const stream = openRouterAdapter.streamCompletion(messages, options);
+          const stream = langdbAdapter.streamCompletion(messages, options);
           let fullContent = '';
 
           for await (const chunk of stream) {
