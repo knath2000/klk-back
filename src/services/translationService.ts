@@ -192,7 +192,7 @@ export class TranslationService {
 // Singleton instance
 export const translationService = new TranslationService(new LangDBAdapter(
   process.env.LANGDB_API_KEY || '',
-  process.env.LANGDB_BASE_URL || 'https://api.langdb.ai'
+  process.env.LANGDB_BASE_URL || 'https://dev.langdb.ai'
 ));
 
 // Periodic cache cleanup

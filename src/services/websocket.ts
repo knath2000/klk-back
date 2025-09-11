@@ -189,7 +189,7 @@ class WebSocketService {
           // Use LangDB for chat
           const langdbAdapter = new LangDBAdapter(
             process.env.LANGDB_API_KEY || '',
-            process.env.LANGDB_BASE_URL || 'https://api.langdb.ai/v1'
+            process.env.LANGDB_BASE_URL || 'https://dev.langdb.ai/v1'
           );
 
           const options: LLMOptions = {
