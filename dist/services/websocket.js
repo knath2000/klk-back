@@ -3,16 +3,29 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.initializeWebSocket = initializeWebSocket;
 const collaborationService_1 = require("./collaborationService");
 const conversationService_1 = require("./conversationService");
+const translationService_1 = require("./translationService");
 class WebSocketService {
     constructor(io) {
         this.users = new Map();
         this.conversationRooms = new Map(); // conversationId -> Set of userIds
+        this.rateLimitMap = new Map();
+        this.metrics = {
+            requests: { count: 0, inc: () => this.metrics.requests.count++ },
+            successes: { count: 0, inc: () => this.metrics.successes.count++ },
+            errors: { count: 0, inc: () => this.metrics.errors.count++ }
+        };
         this.io = io;
         this.setupWebSocketHandlers();
     }
     setupWebSocketHandlers() {
         this.io.on('connection', (socket) => {
             console.log('User connected:', socket.id);
+            // Add catch-all event handler for debugging unhandled events
+            socket.onAny((event, ...args) => {
+                if (!['connect', 'disconnect', 'ping', 'pong'].includes(event)) {
+                    console.log('🔍 UNHANDLED EVENT:', event, 'from', socket.id, 'args:', args.length > 0 ? JSON.stringify(args[0]).substring(0, 200) : 'no args');
+                }
+            });
             // Add error handling for reconnects
             socket.on('connect_error', (err) => {
                 console.error('Socket.IO connect error:', err.message);
@@ -24,6 +37,78 @@ class WebSocketService {
                 console.log('Client reconnected:', socket.id);
                 // Re-join previous rooms if stored
                 // Logic to re-join from userRooms map can be added here
+            });
+            // Enhanced translation request handling with rate limiting and metrics
+            socket.on('translation_request', async (data) => {
+                console.log('📨 Received translation_request:', { ...data, id: socket.id });
+                const transport = socket.conn?.transport?.name || 'unknown';
+                console.log('Transport for translation_request:', transport);
+                // Rate limiting: Simple in-memory check (consider Redis for production)
+                const now = Date.now();
+                const userKey = socket.id;
+                const rateLimitData = this.rateLimitMap.get(userKey);
+                if (!rateLimitData) {
+                    this.rateLimitMap.set(userKey, { count: 0, resetTime: now + 60000 }); // 1 min window
+                }
+                const currentLimit = this.rateLimitMap.get(userKey);
+                if (currentLimit.count >= 10) { // 10 requests per minute
+                    socket.emit('translation_error', { message: 'Rate limit exceeded. Please wait.' });
+                    return;
+                }
+                currentLimit.count++;
+                // Metrics: Increment request counter
+                this.metrics.requests.inc();
+                try {
+                    if (!data.query) {
+                        socket.emit('translation_error', { message: 'Query is required' });
+                        return;
+                    }
+                    // Validate connection state
+                    if (!socket.connected) {
+                        console.warn('Translation request from disconnected socket:', socket.id);
+                        socket.emit('translation_error', { message: 'Connection lost; please retry' });
+                        return;
+                    }
+                    // Call translation service
+                    const result = await translationService_1.translationService.translate({
+                        text: data.query,
+                        sourceLang: data.language || 'en',
+                        targetLang: 'es',
+                        context: data.context,
+                        userId: socket.id // Use socket ID for session
+                    });
+                    // Stream response (delta for partial, final for complete)
+                    if (transport === 'websocket') {
+                        // Stream deltas if websocket (implement true streaming with chunks)
+                        const firstDefinition = result.definitions[0]?.meaning || 'Translation completed';
+                        const chunks = firstDefinition.split(' '); // Simple word-based streaming
+                        chunks.forEach((chunk, index) => {
+                            setTimeout(() => {
+                                socket.emit('translation_delta', { chunk, index, total: chunks.length });
+                            }, index * 100); // 100ms delay per chunk
+                        });
+                        setTimeout(() => {
+                            socket.emit('translation_final', result);
+                        }, chunks.length * 100 + 500);
+                    }
+                    else {
+                        // Polling-friendly: Send full result
+                        socket.emit('translation_final', result);
+                    }
+                    // Metrics: Increment success counter
+                    this.metrics.successes.inc();
+                    console.log('Translation completed for query:', data.query);
+                }
+                catch (error) {
+                    console.error('Translation processing error:', error);
+                    // Metrics: Increment error counter
+                    this.metrics.errors.inc();
+                    socket.emit('translation_error', { message: error.message || 'Translation failed' });
+                }
+            });
+            // Add general error handler for connection issues
+            this.io.engine.on('connection_error', (err) => {
+                console.error('Socket.IO engine connection error:', err.req?.url, err.type, err.message);
             });
             // User authentication
             socket.on('authenticate', (userId) => {
@@ -150,9 +235,10 @@ class WebSocketService {
                     timestamp: new Date().toISOString()
                 });
             });
-            // Handle disconnection
-            socket.on('disconnect', () => {
-                console.log('User disconnected:', socket.id);
+            // Handle disconnection with enhanced logging
+            socket.on('disconnect', (reason) => {
+                const transport = socket.conn?.transport?.name || 'unknown';
+                console.log('🔌 WebSocket DISCONNECTED:', reason, 'transport:', transport, 'at', new Date().toISOString());
                 const user = this.users.get(socket.id);
                 if (user) {
                     // Leave all rooms
@@ -173,6 +259,8 @@ class WebSocketService {
                     // Remove user from tracking
                     this.users.delete(socket.id);
                 }
+                // Cleanup rate limit map
+                this.rateLimitMap.delete(socket.id);
             });
         });
     }

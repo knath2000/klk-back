@@ -3,6 +3,8 @@ declare class WebSocketService {
     private io;
     private users;
     private conversationRooms;
+    private rateLimitMap;
+    private metrics;
     constructor(io: Server);
     private setupWebSocketHandlers;
     broadcastToConversation(conversationId: string, event: string, data: any): void;

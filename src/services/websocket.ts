@@ -29,6 +29,13 @@ class WebSocketService {
     this.io.on('connection', (socket) => {
       console.log('User connected:', socket.id);
 
+      // Add catch-all event handler for debugging unhandled events
+      socket.onAny((event, ...args) => {
+        if (!['connect', 'disconnect', 'ping', 'pong'].includes(event)) {
+          console.log('🔍 UNHANDLED EVENT:', event, 'from', socket.id, 'args:', args.length > 0 ? JSON.stringify(args[0]).substring(0, 200) : 'no args');
+        }
+      });
+
       // Add error handling for reconnects
       socket.on('connect_error', (err) => {
         console.error('Socket.IO connect error:', err.message);
