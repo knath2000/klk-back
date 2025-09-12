@@ -53,6 +53,54 @@ export class TranslationService {
     console.log('LANGDB_MODEL:', process.env.LANGDB_MODEL || 'DEFAULT (gpt-4o-mini)');
   }
 
+  private transformLangDBResponse(langdbResponse: any): TranslationResponse {
+    // Transform definitions: meaning → text, pos → partOfSpeech
+    const transformedDefinitions = langdbResponse.definitions?.map((def: any) => ({
+      text: def.meaning || def.text || '', // Prefer meaning, fallback to text if exists
+      partOfSpeech: def.pos || '',
+      examples: def.examples || [], // Already matches
+      synonyms: def.synonyms || [], // Already matches
+    })) || [];
+
+    // Transform examples: es → spanish, en → english
+    const transformedExamples = langdbResponse.examples?.map((ex: any) => ({
+      spanish: ex.es || ex.spanish || '',
+      english: ex.en || ex.english || '',
+    })) || [];
+
+    // Transform conjugations: Keep as Record, but ensure it's Record<string, string> if needed
+    const transformedConjugations = langdbResponse.conjugations || {};
+    // If it's simple array for nouns, map to present singular/plural
+    if (Array.isArray(transformedConjugations.present)) {
+      transformedConjugations.present = {
+        singular: transformedConjugations.present[0] || '',
+        plural: transformedConjugations.present[1] || '',
+      };
+    }
+    // For full verb conjugations, it's already Record, so no change
+
+    // Transform audio: suggestions → AudioItem array
+    const transformedAudio = (langdbResponse.audio?.suggestions || []).map((url: string) => ({
+      url,
+      type: 'pronunciation' as const,
+      text: langdbResponse.audio?.ipa || '',
+    })) || [];
+
+    // Transform related: Flatten synonyms and antonyms to match frontend expectation
+    const transformedRelated = {
+      synonyms: langdbResponse.related?.synonyms || [],
+      antonyms: langdbResponse.related?.antonyms || [],
+    };
+
+    return {
+      definitions: transformedDefinitions,
+      examples: transformedExamples,
+      conjugations: transformedConjugations,
+      audio: transformedAudio,
+      related: transformedRelated,
+    };
+  }
+
   async translate(request: TranslationRequest): Promise<TranslationResponse> {
     const cacheKey = this.generateCacheKey(request);
     console.log('🔄 Processing translation for:', request.text, 'cacheKey:', cacheKey);
@@ -81,8 +129,8 @@ export class TranslationService {
       console.log('📤 Calling LangDB for translation:', { text: request.text, sourceLang: request.sourceLang, targetLang: request.targetLang });
 
       // Call LangDB with timeout
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('LangDB timeout')), 120000)); // Increased to 120 seconds for gpt-5-mini
-      const result = await Promise.race([
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('LangDB timeout')), 300000)); // Increased to 300 seconds for gpt-5-mini processing
+      const langdbResult = await Promise.race([
         this.langdbAdapter.translateStructured(
           request.text,
           request.sourceLang,
@@ -94,13 +142,16 @@ export class TranslationService {
 
       console.log('✅ LangDB response received for:', request.text);
 
-      // Cache the result
-      this.cache.set(cacheKey, { data: result, timestamp: Date.now() });
+      // Transform the LangDB response to match frontend expectations
+      const transformedResult = this.transformLangDBResponse(langdbResult);
+
+      // Cache the transformed result
+      this.cache.set(cacheKey, { data: transformedResult, timestamp: Date.now() });
 
       // Metrics: Increment success counter
       this.metrics.successes.inc();
 
-      return result;
+      return transformedResult;
     } catch (langdbError: any) {
       console.error('❌ LangDB failed for', request.text, ':', langdbError.message);
       console.error('LangDB error details:', {
@@ -117,11 +168,11 @@ export class TranslationService {
         console.log('🔄 LangDB failed, falling back to OpenRouter for', request.text);
         const openRouterAdapter = new OpenRouterAdapter(process.env.OPENROUTER_API_KEY || '', process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1');
         const systemPrompt = `You are a precise Spanish-English translator. Output ONLY JSON: {
-  "definitions": [{"meaning": "string", "pos": "noun|verb|adj|adv", "usage": "formal|informal|slang"}],
-  "examples": [{"es": "Spanish example", "en": "English example", "context": "usage context"}],
-  "conjugations": {"present": ["yo form", "tú form", ...], "past": [...]},
-  "audio": {"ipa": "phonetic", "suggestions": ["audio suggestions"]},
-  "related": {"synonyms": ["syn1"], "antonyms": ["ant1"]}
+"definitions": [{"meaning": "string", "pos": "noun|verb|adj|adv", "usage": "formal|informal|slang"}],
+"examples": [{"es": "Spanish example", "en": "English example", "context": "usage context"}],
+"conjugations": {"present": ["yo form", "tú form", ...], "past": [...]},
+"audio": {"ipa": "phonetic", "suggestions": ["audio suggestions"]},
+"related": {"synonyms": ["syn1"], "antonyms": ["ant1"]}
 }. Use regional variants if context provided.`;
 
         const userPrompt = `Translate "${request.text}" from ${request.sourceLang} to ${request.targetLang}${regionalContext ? ` with ${regionalContext} context` : ''}.`;
@@ -138,8 +189,8 @@ export class TranslationService {
         const fallbackResult = JSON.parse(rawResult);
         console.log('✅ OpenRouter fallback success for:', request.text);
         // Cache fallback result
-        this.cache.set(cacheKey, { data: fallbackResult, timestamp: Date.now() });
-        return fallbackResult;
+        this.cache.set(cacheKey, { data: this.transformLangDBResponse(fallbackResult), timestamp: Date.now() });
+        return this.transformLangDBResponse(fallbackResult);
       } catch (fallbackError: any) {
         console.error('❌ OpenRouter fallback also failed for', request.text, ':', fallbackError.message);
         // Final fallback JSON
