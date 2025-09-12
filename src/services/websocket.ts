@@ -193,7 +193,7 @@ class WebSocketService {
           );
 
           const options: LLMOptions = {
-            model: 'gpt-4o-mini',
+            model: 'openai/gpt-5-mini',
             timeout: 30000,
             requestId: data.message_id
           };

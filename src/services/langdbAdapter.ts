@@ -18,10 +18,10 @@ export class LangDBAdapter extends BaseLLMAdapter {
       throw new Error('LANGDB_BASE_URL is required for LangDBAdapter');
     }
 
-    let model = process.env.LANGDB_MODEL || 'gpt-4o-mini';
-    if (!['gpt-4o-mini', 'llama-3.1-8b', 'openai/gpt-4o-mini'].includes(model)) {
-      console.warn(`Invalid LANGDB_MODEL "${model}"; defaulting to "gpt-4o-mini" (verify LangDB support)`);
-      model = 'gpt-4o-mini';
+    let model = process.env.LANGDB_MODEL || 'openai/gpt-5-mini';
+    if (!['gpt-4o-mini', 'llama-3.1-8b', 'openai/gpt-4o-mini', 'openai/gpt-5-mini'].includes(model)) {
+      console.warn(`Invalid LANGDB_MODEL "${model}"; defaulting to "openai/gpt-5-mini" (verify LangDB support)`);
+      model = 'openai/gpt-5-mini';
     }
     this.model = model;  // Assume BaseLLMAdapter has this.model; if not, add private model: string;
 
