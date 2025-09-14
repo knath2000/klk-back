@@ -5,8 +5,10 @@ export class LangDBAdapter extends BaseLLMAdapter {
   private model: string;
   private activeRequests: Map<string, AbortController> = new Map();
   private activeStreams: Map<string, { reader: ReadableStreamDefaultReader<Uint8Array>; decoder: TextDecoder; controller: AbortController }> = new Map();
-  private readonly MAX_RETRIES = 3;
-  private readonly RETRY_DELAY = 1000;
+  private readonly MAX_RETRIES = 5; // Increased from 3
+  private readonly RETRY_BASE_DELAY = 2000; // Increased base delay
+  private cache: Map<string, { data: any; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 1000 * 60 * 30; // 30 minutes
 
   constructor(apiKey: string, baseUrl: string) {
     super(apiKey, baseUrl);
@@ -23,7 +25,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
       console.warn(`Invalid LANGDB_MODEL "${model}"; defaulting to "openai/gpt-5-mini" (verify LangDB support)`);
       model = 'openai/gpt-5-mini';
     }
-    this.model = model;  // Assume BaseLLMAdapter has this.model; if not, add private model: string;
+    this.model = model;
 
     console.log('LangDBAdapter initialized with tenant URL:', baseUrl, 'model:', model);
   }
@@ -32,19 +34,17 @@ export class LangDBAdapter extends BaseLLMAdapter {
     messages: LLMMessage[],
     options: LLMOptions
   ): AsyncIterable<DeltaChunk> {
-    const controller = new AbortController();
     const requestId = options.requestId || `req_${Date.now()}`;
-
-    this.activeRequests.set(requestId, controller);
-
     let response: Response | null = null;
+    let controller = new AbortController();
 
     try {
-      // Add timeout to prevent hanging requests
+      // Environment-based timeout
+      const timeoutMs = parseInt(process.env.LANGDB_TIMEOUT || '90000');
       const timeoutId = setTimeout(() => {
         console.warn(`Request ${requestId} timed out, aborting...`);
         controller.abort();
-      }, options.timeout || 30000); // Use same default as chat service
+      }, timeoutMs);
 
       // Model-specific parameter mapping for gpt-5-mini
       const isGpt5Mini = options.model === 'openai/gpt-5-mini';
@@ -61,12 +61,14 @@ export class LangDBAdapter extends BaseLLMAdapter {
         bodyParams.temperature = 0.7;
       }
 
-      // Use native fetch (Node.js 18+)
+      // Use native fetch (Node.js 18+) with keep-alive headers
       response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,
           'Content-Type': 'application/json',
+          'Connection': 'keep-alive',
+          'Keep-Alive': 'timeout=30',
         },
         body: JSON.stringify(bodyParams),
         signal: controller.signal,
@@ -176,28 +178,22 @@ export class LangDBAdapter extends BaseLLMAdapter {
       throw new Error('LANGDB_BASE_URL environment variable is required');
     }
 
-    const controller = new AbortController();
-    const requestId = options.requestId || `req_${Date.now()}`;
-    this.activeRequests.set(requestId, controller);
-
     let lastError: any = null;
 
     for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+      const controller = new AbortController(); // New controller for each attempt
+      const requestId = options.requestId || `req_${Date.now()}`;
+      this.activeRequests.set(requestId, controller);
+
       try {
         console.log(`🔄 LangDB fetch attempt ${attempt}/${this.MAX_RETRIES} for ${requestId}: ${this.baseUrl}/chat/completions`);
 
-        // Log full config for debugging
-        console.log('Fetch config:', {
-          url: `${this.baseUrl}/chat/completions`,
-          headers: { 'Authorization': `Bearer ${this.apiKey ? '[REDACTED]' : 'MISSING'}` },
-          bodyLength: JSON.stringify({ model: options.model, messages }).length
-        });
-
         // Add timeout to prevent hanging requests
+        const timeoutMs = parseInt(process.env.LANGDB_TIMEOUT || '90000');
         const timeoutId = setTimeout(() => {
           console.warn(`Request ${requestId} attempt ${attempt} timed out, aborting...`);
           controller.abort();
-        }, options.timeout || 30000);
+        }, timeoutMs);
 
         // Model-specific parameter mapping for gpt-5-mini
         const isGpt5Mini = options.model === 'openai/gpt-5-mini';
@@ -219,6 +215,8 @@ export class LangDBAdapter extends BaseLLMAdapter {
           headers: {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
+            'Connection': 'keep-alive',
+            'Keep-Alive': 'timeout=30',
           },
           body: JSON.stringify(bodyParams),
           signal: controller.signal,
@@ -237,7 +235,8 @@ export class LangDBAdapter extends BaseLLMAdapter {
             body: fullBody
           });
           if (attempt < this.MAX_RETRIES) {
-            await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * attempt));
+            const delay = this.RETRY_BASE_DELAY * Math.pow(2, attempt - 1); // Exponential backoff
+            await new Promise(resolve => setTimeout(resolve, delay));
             continue;
           }
           throw lastError;
@@ -255,7 +254,8 @@ export class LangDBAdapter extends BaseLLMAdapter {
           stack: error.stack
         });
         if (attempt < this.MAX_RETRIES) {
-          await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * attempt));
+          const delay = this.RETRY_BASE_DELAY * Math.pow(2, attempt - 1); // Exponential backoff
+          await new Promise(resolve => setTimeout(resolve, delay));
           continue;
         }
         throw lastError;
@@ -297,7 +297,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
 
     const options: LLMOptions = {
       model: 'openai/gpt-5-mini', // Updated to use gpt-5-mini for translation (more advanced model for structured outputs)
-      timeout: 30000,
+      timeout: 90000, // Increased for Render
       requestId: `translate_${Date.now()}`
     };
 
@@ -348,16 +348,26 @@ export class LangDBAdapter extends BaseLLMAdapter {
     return {
       definitions: [
         {
-          text: `Fallback: "${text}" (service unavailable)`, // Use 'text' to match frontend expectation (not 'meaning')
+          text: `Error: "${text}" (both services unavailable)`,
+          meaning: `Error: "${text}" (both services unavailable)`,
           pos: 'unknown',
-          usage: 'general'
+          usage: 'error'
         }
       ],
-      examples: [{ es: text, en: 'Translation service temporarily unavailable', context: 'error' }],
+      examples: [],
       conjugations: {},
       audio: { ipa: '', suggestions: [] },
       related: { synonyms: [], antonyms: [] }
     };
+  }
+
+  cleanupCache(): void {
+    const now = Date.now();
+    for (const [key, value] of this.cache.entries()) {
+      if (now - value.timestamp > this.CACHE_TTL) {
+        this.cache.delete(key);
+      }
+    }
   }
 
   async cancel(requestId: string): Promise<void> {
@@ -390,3 +400,14 @@ export class LangDBAdapter extends BaseLLMAdapter {
     this.activeStreams.delete(requestId);
   }
 }
+
+// Singleton instance
+export const translationService = new LangDBAdapter(
+  process.env.LANGDB_API_KEY || '',
+  process.env.LANGDB_GATEWAY_URL || 'https://api.us-east-1.langdb.ai/v1'
+);
+
+// Periodic cache cleanup
+setInterval(() => {
+  translationService.cleanupCache();
+}, 1000 * 60 * 5); // Every 5 minutes
