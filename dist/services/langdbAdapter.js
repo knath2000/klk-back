@@ -1,53 +1,63 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LangDBAdapter = void 0;
+exports.translationService = exports.LangDBAdapter = void 0;
 const llmAdapter_1 = require("./llmAdapter");
 class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
     constructor(apiKey, baseUrl) {
         super(apiKey, baseUrl);
         this.activeRequests = new Map();
         this.activeStreams = new Map();
-        this.MAX_RETRIES = 3;
-        this.RETRY_DELAY = 1000;
+        this.MAX_RETRIES = 5; // Increased from 3
+        this.RETRY_BASE_DELAY = 2000; // Increased base delay
+        this.cache = new Map();
+        this.CACHE_TTL = 1000 * 60 * 30; // 30 minutes
         if (!apiKey) {
             throw new Error('LANGDB_API_KEY is required for LangDBAdapter');
         }
         if (!baseUrl) {
-            throw new Error('LANGDB_BASE_URL is required for LangDBAdapter');
+            throw new Error('LANGDB_GATEWAY_URL is required for LangDBAdapter');
         }
-        let model = process.env.LANGDB_MODEL || 'gpt-4o-mini';
-        if (!['gpt-4o-mini', 'llama-3.1-8b', 'openai/gpt-4o-mini'].includes(model)) {
-            console.warn(`Invalid LANGDB_MODEL "${model}"; defaulting to "gpt-4o-mini" (verify LangDB support)`);
-            model = 'gpt-4o-mini';
+        let model = process.env.LANGDB_MODEL || 'openai/gpt-5-mini';
+        if (!['gpt-4o-mini', 'llama-3.1-8b', 'openai/gpt-4o-mini', 'openai/gpt-5-mini'].includes(model)) {
+            console.warn(`Invalid LANGDB_MODEL "${model}"; defaulting to "openai/gpt-5-mini" (verify LangDB support)`);
+            model = 'openai/gpt-5-mini';
         }
-        this.model = model; // Assume BaseLLMAdapter has this.model; if not, add private model: string;
+        this.model = model;
         console.log('LangDBAdapter initialized with tenant URL:', baseUrl, 'model:', model);
     }
     async *streamCompletion(messages, options) {
-        const controller = new AbortController();
         const requestId = options.requestId || `req_${Date.now()}`;
-        this.activeRequests.set(requestId, controller);
         let response = null;
+        let controller = new AbortController();
         try {
-            // Add timeout to prevent hanging requests
+            // Environment-based timeout
+            const timeoutMs = parseInt(process.env.LANGDB_TIMEOUT || '90000');
             const timeoutId = setTimeout(() => {
                 console.warn(`Request ${requestId} timed out, aborting...`);
                 controller.abort();
-            }, options.timeout || 30000); // Use same default as chat service
-            // Use native fetch (Node.js 18+)
+            }, timeoutMs);
+            // Model-specific parameter mapping for gpt-5-mini
+            const isGpt5Mini = options.model === 'openai/gpt-5-mini';
+            const maxTokensParam = isGpt5Mini ? 'max_completion_tokens' : 'max_tokens';
+            const bodyParams = {
+                model: options.model,
+                messages,
+                stream: true,
+                [maxTokensParam]: 1000,
+            };
+            if (!isGpt5Mini) {
+                bodyParams.temperature = 0.7;
+            }
+            // Use native fetch (Node.js 18+) with keep-alive headers
             response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
                     'Content-Type': 'application/json',
+                    'Connection': 'keep-alive',
+                    'Keep-Alive': 'timeout=30',
                 },
-                body: JSON.stringify({
-                    model: options.model,
-                    messages,
-                    stream: true,
-                    max_tokens: 1000,
-                    temperature: 0.7,
-                }),
+                body: JSON.stringify(bodyParams),
                 signal: controller.signal,
             });
             clearTimeout(timeoutId);
@@ -144,39 +154,42 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             throw new Error('LANGDB_API_KEY environment variable is required');
         }
         if (!this.baseUrl) {
-            throw new Error('LANGDB_BASE_URL environment variable is required');
+            throw new Error('LANGDB_GATEWAY_URL environment variable is required');
         }
-        const controller = new AbortController();
-        const requestId = options.requestId || `req_${Date.now()}`;
-        this.activeRequests.set(requestId, controller);
         let lastError = null;
         for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+            const controller = new AbortController(); // New controller for each attempt
+            const requestId = options.requestId || `req_${Date.now()}`;
+            this.activeRequests.set(requestId, controller);
             try {
                 console.log(`🔄 LangDB fetch attempt ${attempt}/${this.MAX_RETRIES} for ${requestId}: ${this.baseUrl}/chat/completions`);
-                // Log full config for debugging
-                console.log('Fetch config:', {
-                    url: `${this.baseUrl}/chat/completions`,
-                    headers: { 'Authorization': `Bearer ${this.apiKey ? '[REDACTED]' : 'MISSING'}` },
-                    bodyLength: JSON.stringify({ model: options.model, messages }).length
-                });
                 // Add timeout to prevent hanging requests
+                const timeoutMs = parseInt(process.env.LANGDB_TIMEOUT || '90000');
                 const timeoutId = setTimeout(() => {
                     console.warn(`Request ${requestId} attempt ${attempt} timed out, aborting...`);
                     controller.abort();
-                }, options.timeout || 30000);
+                }, timeoutMs);
+                // Model-specific parameter mapping for gpt-5-mini
+                const isGpt5Mini = options.model === 'openai/gpt-5-mini';
+                const maxTokensParam = isGpt5Mini ? 'max_completion_tokens' : 'max_tokens';
+                const bodyParams = {
+                    model: options.model,
+                    messages,
+                    stream: false,
+                    [maxTokensParam]: 1000,
+                };
+                if (!isGpt5Mini) {
+                    bodyParams.temperature = 0.7;
+                }
                 const response = await fetch(`${this.baseUrl}/chat/completions`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${this.apiKey}`,
                         'Content-Type': 'application/json',
+                        'Connection': 'keep-alive',
+                        'Keep-Alive': 'timeout=30',
                     },
-                    body: JSON.stringify({
-                        model: options.model,
-                        messages,
-                        stream: false,
-                        max_tokens: 1000,
-                        temperature: 0.7,
-                    }),
+                    body: JSON.stringify(bodyParams),
                     signal: controller.signal,
                 });
                 clearTimeout(timeoutId);
@@ -191,7 +204,8 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
                         body: fullBody
                     });
                     if (attempt < this.MAX_RETRIES) {
-                        await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * attempt));
+                        const delay = this.RETRY_BASE_DELAY * Math.pow(2, attempt - 1); // Exponential backoff
+                        await new Promise(resolve => setTimeout(resolve, delay));
                         continue;
                     }
                     throw lastError;
@@ -209,7 +223,8 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
                     stack: error.stack
                 });
                 if (attempt < this.MAX_RETRIES) {
-                    await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * attempt));
+                    const delay = this.RETRY_BASE_DELAY * Math.pow(2, attempt - 1); // Exponential backoff
+                    await new Promise(resolve => setTimeout(resolve, delay));
                     continue;
                 }
                 throw lastError;
@@ -242,8 +257,8 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             { role: 'user', content: userPrompt }
         ];
         const options = {
-            model: 'gpt-4', // Use GPT-4 for better translation quality
-            timeout: 30000,
+            model: 'openai/gpt-5-mini', // Updated to use gpt-5-mini for translation (more advanced model for structured outputs)
+            timeout: 90000, // Increased for Render
             requestId: `translate_${Date.now()}`
         };
         try {
@@ -252,21 +267,32 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
                 console.warn('Empty response from LangDB for translation:', text);
                 return this.getFallbackTranslation(text, sourceLang, targetLang);
             }
+            // Log raw response for debugging
+            console.log('Raw LangDB translation response:', response.substring(0, 500) + (response.length > 500 ? '...' : ''));
             try {
-                const parsed = JSON.parse(response);
-                // LangDB returns { choices: [{ message: { content: JSON_STRING } }] } – parse inner content as JSON
-                const innerContent = parsed.choices?.[0]?.message?.content;
-                if (innerContent) {
-                    const structured = JSON.parse(innerContent);
-                    if (structured.definitions && Array.isArray(structured.definitions)) {
-                        return structured;
-                    }
+                // Since we prompt for direct JSON output, parse the response content directly
+                const structured = JSON.parse(response.trim());
+                // Validate structure: must have definitions array and other expected keys
+                if (structured.definitions && Array.isArray(structured.definitions) &&
+                    structured.examples && Array.isArray(structured.examples) &&
+                    typeof structured.conjugations === 'object' &&
+                    typeof structured.audio === 'object' &&
+                    typeof structured.related === 'object') {
+                    console.log('✅ Valid structured translation parsed from LangDB');
+                    return structured;
                 }
-                console.warn('Invalid LangDB structure - using fallback');
-                return this.getFallbackTranslation(text, sourceLang, targetLang);
+                else {
+                    console.warn('Invalid LangDB structure (missing expected keys or invalid types):', {
+                        hasDefinitions: !!structured.definitions,
+                        definitionsType: Array.isArray(structured.definitions) ? 'array' : typeof structured.definitions,
+                        hasExamples: !!structured.examples,
+                        // Add more validation logs as needed
+                    });
+                    return this.getFallbackTranslation(text, sourceLang, targetLang);
+                }
             }
             catch (parseError) {
-                console.error('JSON parse error in translateStructured:', parseError, 'Raw response:', response.substring(0, 500) + (response.length > 500 ? '...' : ''));
+                console.error('JSON parse error in translateStructured:', parseError instanceof Error ? parseError.message : String(parseError), 'Raw response:', response.substring(0, 500) + (response.length > 500 ? '...' : ''));
                 return this.getFallbackTranslation(text, sourceLang, targetLang);
             }
         }
@@ -280,16 +306,25 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
         return {
             definitions: [
                 {
-                    text: `Fallback: "${text}" (service unavailable)`, // Use 'text' to match frontend expectation (not 'meaning')
+                    text: `Error: "${text}" (both services unavailable)`,
+                    meaning: `Error: "${text}" (both services unavailable)`,
                     pos: 'unknown',
-                    usage: 'general'
+                    usage: 'error'
                 }
             ],
-            examples: [{ es: text, en: 'Translation service temporarily unavailable', context: 'error' }],
+            examples: [],
             conjugations: {},
             audio: { ipa: '', suggestions: [] },
             related: { synonyms: [], antonyms: [] }
         };
+    }
+    cleanupCache() {
+        const now = Date.now();
+        for (const [key, value] of this.cache.entries()) {
+            if (now - value.timestamp > this.CACHE_TTL) {
+                this.cache.delete(key);
+            }
+        }
     }
     async cancel(requestId) {
         const controller = this.activeRequests.get(requestId);
@@ -321,4 +356,10 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
     }
 }
 exports.LangDBAdapter = LangDBAdapter;
+// Singleton instance
+exports.translationService = new LangDBAdapter(process.env.LANGDB_API_KEY || '', process.env.LANGDB_GATEWAY_URL || 'https://api.us-east-1.langdb.ai/v1');
+// Periodic cache cleanup
+setInterval(() => {
+    exports.translationService.cleanupCache();
+}, 1000 * 60 * 5); // Every 5 minutes
 //# sourceMappingURL=langdbAdapter.js.map

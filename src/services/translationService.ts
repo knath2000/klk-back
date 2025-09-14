@@ -49,7 +49,7 @@ export class TranslationService {
   constructor(langdbAdapter: LangDBAdapter) {
     this.langdbAdapter = langdbAdapter;
     // Log env vars to verify loading
-    console.log('TranslationService initialized with LANGDB_BASE_URL:', process.env.LANGDB_BASE_URL || 'DEFAULT (generic)');
+    console.log('TranslationService initialized with LANGDB_GATEWAY_URL:', process.env.LANGDB_GATEWAY_URL || 'DEFAULT (generic)');
     console.log('LANGDB_MODEL:', process.env.LANGDB_MODEL || 'DEFAULT (gpt-4o-mini)');
   }
 

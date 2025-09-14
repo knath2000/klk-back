@@ -17,7 +17,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
       throw new Error('LANGDB_API_KEY is required for LangDBAdapter');
     }
     if (!baseUrl) {
-      throw new Error('LANGDB_BASE_URL is required for LangDBAdapter');
+      throw new Error('LANGDB_GATEWAY_URL is required for LangDBAdapter');
     }
 
     let model = process.env.LANGDB_MODEL || 'openai/gpt-5-mini';
@@ -175,7 +175,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
       throw new Error('LANGDB_API_KEY environment variable is required');
     }
     if (!this.baseUrl) {
-      throw new Error('LANGDB_BASE_URL environment variable is required');
+      throw new Error('LANGDB_GATEWAY_URL environment variable is required');
     }
 
     let lastError: any = null;

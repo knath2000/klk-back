@@ -5,7 +5,9 @@ export declare class LangDBAdapter extends BaseLLMAdapter {
     private activeRequests;
     private activeStreams;
     private readonly MAX_RETRIES;
-    private readonly RETRY_DELAY;
+    private readonly RETRY_BASE_DELAY;
+    private cache;
+    private readonly CACHE_TTL;
     constructor(apiKey: string, baseUrl: string);
     streamCompletion(messages: LLMMessage[], options: LLMOptions): AsyncIterable<DeltaChunk>;
     fetchCompletion(messages: LLMMessage[], options: LLMOptions): Promise<string>;
@@ -19,6 +21,8 @@ export declare class LangDBAdapter extends BaseLLMAdapter {
      */
     translateStructured(text: string, sourceLang: string, targetLang: string, context?: string): Promise<any>;
     private getFallbackTranslation;
+    cleanupCache(): void;
     cancel(requestId: string): Promise<void>;
 }
+export declare const translationService: LangDBAdapter;
 //# sourceMappingURL=langdbAdapter.d.ts.map

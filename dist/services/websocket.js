@@ -24,7 +24,7 @@ class WebSocketService {
             console.log('User connected:', socket.id);
             // Add catch-all event handler for debugging unhandled events
             socket.onAny((event, ...args) => {
-                if (!['connect', 'disconnect', 'ping', 'pong'].includes(event)) {
+                if (!['connect', 'disconnect', 'ping', 'pong', 'translation_request', 'user_message'].includes(event)) {
                     console.log('🔍 UNHANDLED EVENT:', event, 'from', socket.id, 'args:', args.length > 0 ? JSON.stringify(args[0]).substring(0, 200) : 'no args');
                 }
             });
@@ -155,9 +155,9 @@ class WebSocketService {
                         { role: 'user', content: data.message }
                     ];
                     // Use LangDB for chat
-                    const langdbAdapter = new langdbAdapter_1.LangDBAdapter(process.env.LANGDB_API_KEY || '', process.env.LANGDB_BASE_URL || 'https://api.langdb.ai/v1');
+                    const langdbAdapter = new langdbAdapter_1.LangDBAdapter(process.env.LANGDB_API_KEY || '', process.env.LANGDB_GATEWAY_URL || 'https://api.us-east-1.langdb.ai/v1');
                     const options = {
-                        model: 'gpt-4o-mini',
+                        model: 'openai/gpt-5-mini',
                         timeout: 30000,
                         requestId: data.message_id
                     };
