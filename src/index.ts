@@ -3,6 +3,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import type { LLMMessage } from './types';
 
 // Import routes
 import conversationsRouter from './routes/conversations';
@@ -21,6 +22,15 @@ import { collaborationService } from './services/collaborationService';
 import { initializeWebSocket } from './services/websocket';
 
 dotenv.config();
+
+// Log environment variables for debugging
+console.log('🔧 Environment Variables:', {
+  LANGDB_GATEWAY_URL: process.env.LANGDB_GATEWAY_URL,
+  LANGDB_API_KEY: process.env.LANGDB_API_KEY ? '[REDACTED]' : 'MISSING',
+  LANGDB_TIMEOUT: process.env.LANGDB_TIMEOUT,
+  NODE_ENV: process.env.NODE_ENV,
+  PORT: process.env.PORT || 3001
+});
 
 const server = express();
 const httpServer = http.createServer(server);
@@ -95,6 +105,31 @@ server.get('/api/health', (req, res) => {
     websocketInitialized: !!webSocketService,
     translationServiceReady: true
   });
+});
+
+// Test LangDB endpoint for diagnostics
+server.get('/api/test-langdb', async (req, res) => {
+  try {
+    const { LangDBAdapter } = await import('./services/langdbAdapter');
+    const langdbAdapter = new LangDBAdapter(
+      process.env.LANGDB_API_KEY || '',
+      process.env.LANGDB_GATEWAY_URL || ''
+    );
+    const testMessages: LLMMessage[] = [{ role: 'user', content: 'test' }];
+    const options = { model: 'openai/gpt-5-mini', timeout: 10000 };
+    const result = await langdbAdapter.fetchCompletion(testMessages, options);
+    res.json({ status: 'success', response: result.substring(0, 100) });
+  } catch (error: any) {
+    res.status(500).json({
+      status: 'error',
+      error: error?.message || 'Unknown error',
+      stack: error?.stack || 'No stack trace',
+      env: {
+        LANGDB_GATEWAY_URL: process.env.LANGDB_GATEWAY_URL,
+        LANGDB_API_KEY: process.env.LANGDB_API_KEY ? '[REDACTED]' : 'MISSING'
+      }
+    });
+  }
 });
 
 const PORT = process.env.PORT || 3001;

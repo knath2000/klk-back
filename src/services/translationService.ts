@@ -163,9 +163,9 @@ export class TranslationService {
       // Metrics: Increment error counter
       this.metrics.errors.inc();
 
-      // Fallback to OpenRouter using general completion and parse
+      // Early fallback to OpenRouter after first LangDB failure to avoid multiple "fetch failed" errors
       try {
-        console.log('🔄 LangDB failed, falling back to OpenRouter for', request.text);
+        console.log('🔄 LangDB failed, implementing early fallback to OpenRouter for', request.text);
         const openRouterAdapter = new OpenRouterAdapter(process.env.OPENROUTER_API_KEY || '', process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1');
         const systemPrompt = `You are a precise Spanish-English translator. Output ONLY JSON: {
 "definitions": [{"meaning": "string", "pos": "noun|verb|adj|adv", "usage": "formal|informal|slang"}],
@@ -187,12 +187,12 @@ export class TranslationService {
         };
         const rawResult = await openRouterAdapter.fetchCompletion(messages, options);
         const fallbackResult = JSON.parse(rawResult);
-        console.log('✅ OpenRouter fallback success for:', request.text);
+        console.log('✅ OpenRouter early fallback success for:', request.text);
         // Cache fallback result
         this.cache.set(cacheKey, { data: this.transformLangDBResponse(fallbackResult), timestamp: Date.now() });
         return this.transformLangDBResponse(fallbackResult);
       } catch (fallbackError: any) {
-        console.error('❌ OpenRouter fallback also failed for', request.text, ':', fallbackError.message);
+        console.error('❌ OpenRouter early fallback also failed for', request.text, ':', fallbackError.message);
         // Final fallback JSON
         const finalFallback = {
           definitions: [

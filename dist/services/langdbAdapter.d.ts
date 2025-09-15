@@ -8,7 +8,22 @@ export declare class LangDBAdapter extends BaseLLMAdapter {
     private readonly RETRY_BASE_DELAY;
     private cache;
     private readonly CACHE_TTL;
+    private dnsCache;
+    private readonly DNS_CACHE_TTL;
+    private connectionPool;
+    private readonly CONNECTION_POOL_TTL;
+    private circuitBreakerState;
+    private consecutiveFailures;
+    private readonly CIRCUIT_BREAKER_FAILURE_THRESHOLD;
+    private readonly CIRCUIT_BREAKER_TIMEOUT;
+    private lastFailureTime;
     constructor(apiKey: string, baseUrl: string);
+    private shouldAllowRequest;
+    private recordSuccess;
+    private recordFailure;
+    private resolveDNSWithRetry;
+    private getConnectionAgent;
+    private cleanupResources;
     streamCompletion(messages: LLMMessage[], options: LLMOptions): AsyncIterable<DeltaChunk>;
     fetchCompletion(messages: LLMMessage[], options: LLMOptions): Promise<string>;
     /**
