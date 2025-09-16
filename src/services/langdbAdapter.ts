@@ -418,28 +418,92 @@ export class LangDBAdapter extends BaseLLMAdapter {
   }
 
   /**
-   * Translator mode: Generate structured JSON output for translation queries
-   * @param text The text to translate
-   * @param sourceLang Source language (e.g., 'es')
-   * @param targetLang Target language (e.g., 'en')
-   * @param context Optional regional context (e.g., 'mex' for Mexican Spanish)
-   * @returns Promise resolving to structured translation JSON
-   */
+    * Translator mode: Generate structured JSON output for translation queries
+    * Enhanced prompt engineering for comprehensive spanishdict.com-like results
+    * @param text The text to translate
+    * @param sourceLang Source language (e.g., 'es')
+    * @param targetLang Target language (e.g., 'en')
+    * @param context Optional regional context (e.g., 'mex' for Mexican Spanish)
+    * @returns Promise resolving to structured translation JSON
+    */
   async translateStructured(
     text: string,
     sourceLang: string,
     targetLang: string,
     context?: string
   ): Promise<any> {
-    const systemPrompt = `You are a precise Spanish-English translator. Output ONLY JSON: {
-"definitions": [{"meaning": "string", "pos": "noun|verb|adj|adv", "usage": "formal|informal|slang"}],
-"examples": [{"es": "Spanish example", "en": "English example", "context": "usage context"}],
-"conjugations": {"present": ["yo form", "tú form", ...], "past": [...], ...},
-"audio": {"ipa": "phonetic", "suggestions": ["audio file suggestions"]},
-"related": {"synonyms": ["syn1", "syn2"], "antonyms": ["ant1", "ant2"]}
-}. Use regional variants if context provided.`;
+    // Enhanced system prompt with detailed instructions for structured output
+    const systemPrompt = `You are an expert Spanish-English translator specializing in comprehensive linguistic analysis. You must output ONLY valid JSON with this exact structure:
 
-    const userPrompt = `Translate "${text}" from ${sourceLang} to ${targetLang}${context ? ` with ${context} regional context` : ''}.`;
+{
+  "definitions": [
+    {
+      "text": "exact word/phrase being defined",
+      "partOfSpeech": "noun|verb|adjective|adverb|interjection|conjunction|preposition",
+      "meaning": "clear English definition",
+      "examples": ["example sentence 1", "example sentence 2"],
+      "usage": "formal|informal|slang|colloquial|literary",
+      "regional": "general|mexico|argentina|spain|colombia|etc"
+    }
+  ],
+  "examples": [
+    {
+      "text": "original Spanish text",
+      "translation": "English translation",
+      "context": "brief usage context or situation"
+    }
+  ],
+  "conjugations": {
+    "tense": {
+      "yo": "first person singular",
+      "tú": "second person singular informal",
+      "él/ella": "third person singular",
+      "nosotros": "first person plural",
+      "vosotros": "second person plural informal (Spain)",
+      "ellos/ellas": "third person plural"
+    }
+  },
+  "audio": [
+    {
+      "url": "suggested audio file path or URL",
+      "pronunciation": "IPA phonetic transcription",
+      "region": "accent/dialect specification"
+    }
+  ],
+  "related": [
+    {
+      "word": "related word",
+      "type": "synonym|antonym|related|cognate",
+      "relation": "brief explanation of relationship"
+    }
+  ]
+}
+
+CRITICAL INSTRUCTIONS:
+1. Output ONLY valid JSON - no markdown, no explanations, no additional text
+2. Include regional variations when context is provided (e.g., Mexican Spanish uses different vocabulary)
+3. Provide multiple definitions if the word has different meanings
+4. Include conjugations only for verbs, set to empty object {} for non-verbs
+5. Always include at least 2-3 examples with natural usage
+6. Use accurate IPA pronunciation when possible
+7. Include synonyms, antonyms, and related terms when relevant
+8. Consider formality levels and usage contexts`;
+
+    // Enhanced user prompt with specific instructions
+    const userPrompt = `Translate and analyze: "${text}"
+
+Language pair: ${sourceLang} → ${targetLang}
+${context ? `Regional context: ${context} Spanish variant` : 'General Spanish context'}
+
+Provide comprehensive analysis including:
+- Multiple definitions with part of speech
+- Natural usage examples
+- Verb conjugations (if applicable)
+- Pronunciation guidance
+- Related words and synonyms
+- Regional variations and formality levels
+
+Focus on accuracy and cultural context.`;
 
     const messages: LLMMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -447,8 +511,8 @@ export class LangDBAdapter extends BaseLLMAdapter {
     ];
 
     const options: LLMOptions = {
-      model: 'openai/gpt-5-mini', // Updated to use gpt-5-mini for translation (more advanced model for structured outputs)
-      timeout: 90000, // Increased for Render
+      model: 'openai/gpt-5-mini',
+      timeout: 90000,
       requestId: `translate_${Date.now()}`
     };
 
@@ -457,44 +521,76 @@ export class LangDBAdapter extends BaseLLMAdapter {
 
       if (!response || response.trim() === '') {
         console.warn('Empty response from LangDB for translation:', text);
-        return this.getFallbackTranslation(text, sourceLang, targetLang);
+        return this.getFallbackTranslation(text, sourceLang, targetLang, context);
       }
 
       // Log raw response for debugging
       console.log('Raw LangDB translation response:', response.substring(0, 500) + (response.length > 500 ? '...' : ''));
 
       try {
-        // Since we prompt for direct JSON output, parse the response content directly
-        const structured = JSON.parse(response.trim());
+        // Clean the response by removing any potential markdown or extra text
+        let cleanResponse = response.trim();
 
-        // Validate structure: must have definitions array and other expected keys
-        if (structured.definitions && Array.isArray(structured.definitions) &&
-            structured.examples && Array.isArray(structured.examples) &&
-            typeof structured.conjugations === 'object' &&
-            typeof structured.audio === 'object' &&
-            typeof structured.related === 'object') {
+        // Remove potential markdown code blocks
+        if (cleanResponse.startsWith('```json')) {
+          cleanResponse = cleanResponse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+        } else if (cleanResponse.startsWith('```')) {
+          cleanResponse = cleanResponse.replace(/^```\s*/, '').replace(/\s*```$/, '');
+        }
+
+        // Parse the cleaned JSON response
+        const structured = JSON.parse(cleanResponse);
+
+        // Enhanced validation with detailed error reporting
+        const validationErrors: string[] = [];
+
+        if (!structured.definitions || !Array.isArray(structured.definitions)) {
+          validationErrors.push('definitions must be an array');
+        }
+        if (!structured.examples || !Array.isArray(structured.examples)) {
+          validationErrors.push('examples must be an array');
+        }
+        if (!structured.conjugations || typeof structured.conjugations !== 'object') {
+          validationErrors.push('conjugations must be an object');
+        }
+        if (!structured.audio || !Array.isArray(structured.audio)) {
+          validationErrors.push('audio must be an array');
+        }
+        if (!structured.related || !Array.isArray(structured.related)) {
+          validationErrors.push('related must be an array');
+        }
+
+        if (validationErrors.length === 0) {
           console.log('✅ Valid structured translation parsed from LangDB');
           return structured;
         } else {
-          console.warn('Invalid LangDB structure (missing expected keys or invalid types):', {
+          console.warn('Invalid LangDB structure:', validationErrors.join(', '));
+          console.warn('Received structure:', {
             hasDefinitions: !!structured.definitions,
             definitionsType: Array.isArray(structured.definitions) ? 'array' : typeof structured.definitions,
             hasExamples: !!structured.examples,
-            // Add more validation logs as needed
+            examplesType: Array.isArray(structured.examples) ? 'array' : typeof structured.examples,
+            hasConjugations: !!structured.conjugations,
+            conjugationsType: typeof structured.conjugations,
+            hasAudio: !!structured.audio,
+            audioType: Array.isArray(structured.audio) ? 'array' : typeof structured.audio,
+            hasRelated: !!structured.related,
+            relatedType: Array.isArray(structured.related) ? 'array' : typeof structured.related
           });
-          return this.getFallbackTranslation(text, sourceLang, targetLang);
+          return this.getFallbackTranslation(text, sourceLang, targetLang, context);
         }
       } catch (parseError) {
-        console.error('JSON parse error in translateStructured:', parseError instanceof Error ? parseError.message : String(parseError), 'Raw response:', response.substring(0, 500) + (response.length > 500 ? '...' : ''));
-        return this.getFallbackTranslation(text, sourceLang, targetLang);
+        console.error('JSON parse error in translateStructured:', parseError instanceof Error ? parseError.message : String(parseError));
+        console.error('Raw response that failed to parse:', response.substring(0, 1000));
+        return this.getFallbackTranslation(text, sourceLang, targetLang, context);
       }
     } catch (error: any) {
-      console.error('Translation fetch error:', error.message);
-      return this.getFallbackTranslation(text, sourceLang, targetLang);
+      console.error('Translation fetch error:', error.message, error.stack);
+      return this.getFallbackTranslation(text, sourceLang, targetLang, context);
     }
   }
 
-  private getFallbackTranslation(text: string, sourceLang: string, targetLang: string): any {
+  private getFallbackTranslation(text: string, sourceLang: string, targetLang: string, context?: string): any {
     console.log('🔄 Using fallback translation for:', text, 'due to LangDB failure');
     return {
       definitions: [

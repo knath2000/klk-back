@@ -17,6 +17,8 @@ class WebSocketService {
   private users: Map<string, WebSocketUser> = new Map();
   private conversationRooms: Map<string, Set<string>> = new Map(); // conversationId -> Set of userIds
   private rateLimitMap: Map<string, { count: number; resetTime: number }> = new Map();
+  private socketActivity: Map<string, number> = new Map(); // socketId -> lastActivity
+  private idleTimeoutCleanup: NodeJS.Timeout | null = null;
   private metrics = {
     requests: { count: 0, inc: () => this.metrics.requests.count++ },
     successes: { count: 0, inc: () => this.metrics.successes.count++ },
@@ -26,11 +28,56 @@ class WebSocketService {
   constructor(io: Server) {
     this.io = io;
     this.setupWebSocketHandlers();
+    this.startIdleTimeoutCleanup();
+  }
+
+  private startIdleTimeoutCleanup() {
+    // Clean up idle connections every 5 minutes
+    this.idleTimeoutCleanup = setInterval(() => {
+      this.cleanupIdleConnections();
+    }, 5 * 60 * 1000); // 5 minutes
+  }
+
+  private cleanupIdleConnections() {
+    const now = Date.now();
+    const idleTimeout = 30 * 60 * 1000; // 30 minutes
+    let cleanedCount = 0;
+
+    for (const [socketId, lastActivity] of this.socketActivity.entries()) {
+      if (now - lastActivity > idleTimeout) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket) {
+          console.log('🧹 Cleaning up idle connection:', socketId, 'last activity:', new Date(lastActivity).toISOString());
+          socket.disconnect(true);
+          cleanedCount++;
+        }
+        this.socketActivity.delete(socketId);
+      }
+    }
+
+    if (cleanedCount > 0) {
+      console.log(`🧹 Cleaned up ${cleanedCount} idle connections`);
+    }
+  }
+
+  private updateActivity(socketId: string) {
+    this.socketActivity.set(socketId, Date.now());
   }
 
   private setupWebSocketHandlers() {
     this.io.on('connection', (socket) => {
       console.log('User connected:', socket.id);
+
+      // Initialize activity tracking
+      this.updateActivity(socket.id);
+
+      // Check for session ID in query parameters for reconnection
+      const sessionId = socket.handshake.query.sessionId as string;
+      if (sessionId) {
+        console.log('🔄 Session ID detected:', sessionId, 'for socket:', socket.id);
+        // Store session mapping for potential state restoration
+        (socket as any).sessionId = sessionId;
+      }
 
       // Add catch-all event handler for debugging unhandled events
       socket.onAny((event, ...args) => {
@@ -46,15 +93,36 @@ class WebSocketService {
         socket.emit('reconnect_attempt', { delay: 1000 });
       });
 
-      // Add reconnect event handler
+      // Enhanced reconnect event handler
       socket.on('reconnect', () => {
-        console.log('Client reconnected:', socket.id);
-        // Re-join previous rooms if stored
-        // Logic to re-join from userRooms map can be added here
+        console.log('🔄 Client reconnected:', socket.id);
+
+        // Check if we have a session ID for state restoration
+        const sessionId = (socket as any).sessionId;
+        if (sessionId) {
+          console.log('🔄 Attempting to restore session state for:', sessionId);
+
+          // Look for existing user data that might be stored
+          // In a production system, this would come from a database/cache
+          // For now, we'll emit a session restoration event
+          socket.emit('session_restored', {
+            sessionId,
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        // Notify client of successful reconnection
+        socket.emit('reconnected', {
+          timestamp: new Date().toISOString(),
+          sessionRestored: !!sessionId
+        });
       });
 
       // Enhanced translation request handling with rate limiting and metrics
       socket.on('translation_request', async (data: { query: string; language: string; context?: string; timestamp: number }) => {
+        // Update activity timestamp
+        this.updateActivity(socket.id);
+
         console.log('📨 Received translation_request:', { ...data, id: socket.id });
         const transport = socket.conn?.transport?.name || 'unknown';
         console.log('Transport for translation_request:', transport);
@@ -134,6 +202,9 @@ class WebSocketService {
         client_ts: number;
         message_id: string;
       }) => {
+        // Update activity timestamp
+        this.updateActivity(socket.id);
+
         console.log('📨 Received user_message:', { ...data, id: socket.id });
         const transport = socket.conn?.transport?.name || 'unknown';
         console.log('Transport for user_message:', transport);
@@ -398,7 +469,30 @@ class WebSocketService {
       // Handle disconnection with enhanced logging
       socket.on('disconnect', (reason) => {
         const transport = socket.conn?.transport?.name || 'unknown';
-        console.log('🔌 WebSocket DISCONNECTED:', reason, 'transport:', transport, 'at', new Date().toISOString());
+        const sessionId = (socket as any).sessionId;
+
+        // Enhanced disconnect logging with reason categorization
+        let disconnectCategory = 'unknown';
+        if (reason === 'io client disconnect' as any) {
+          disconnectCategory = 'client_initiated';
+        } else if (reason === 'transport close' as any) {
+          disconnectCategory = 'transport_closed';
+        } else if (reason === 'ping timeout' as any) {
+          disconnectCategory = 'ping_timeout';
+        } else if (reason === 'transport error' as any) {
+          disconnectCategory = 'transport_error';
+        } else {
+          disconnectCategory = reason;
+        }
+
+        console.log('🔌 WebSocket DISCONNECTED:', {
+          socketId: socket.id,
+          reason,
+          category: disconnectCategory,
+          transport,
+          sessionId,
+          timestamp: new Date().toISOString()
+        });
 
         const user = this.users.get(socket.id);
         if (user) {
@@ -424,10 +518,32 @@ class WebSocketService {
           this.users.delete(socket.id);
         }
 
-        // Cleanup rate limit map
+        // Cleanup activity tracking and rate limit map
+        this.socketActivity.delete(socket.id);
         this.rateLimitMap.delete(socket.id);
       });
     });
+  }
+
+  // Cleanup method for graceful shutdown
+  destroy() {
+    if (this.idleTimeoutCleanup) {
+      clearInterval(this.idleTimeoutCleanup);
+      this.idleTimeoutCleanup = null;
+    }
+
+    // Disconnect all sockets
+    for (const [socketId] of this.socketActivity) {
+      const socket = this.io.sockets.sockets.get(socketId);
+      if (socket) {
+        socket.disconnect(true);
+      }
+    }
+
+    this.socketActivity.clear();
+    this.rateLimitMap.clear();
+    this.users.clear();
+    this.conversationRooms.clear();
   }
 
   // Broadcast message to all users in a conversation

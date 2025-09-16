@@ -1,5 +1,3 @@
-// ... existing code ...
-
 import { LLMMessage, LLMOptions } from '../types';
 import { LangDBAdapter } from './langdbAdapter';
 import { OpenRouterAdapter } from './openrouterAdapter';
@@ -214,9 +212,10 @@ export class TranslationService {
     }
   }
 
-  async getTranslationHistory(userId: string): Promise<Array<{ query: string; response: TranslationResponse; timestamp: Date }>> {
-    // TODO: Implement database storage for translation history
+  async getTranslationHistory(userId: string, limit: number = 50, offset: number = 0): Promise<Array<{ query: string; response: TranslationResponse; timestamp: Date }>> {
+    // TODO: Implement database storage for translation history with pagination
     // For now, return empty array
+    console.log(`Getting translation history for user ${userId} (limit: ${limit}, offset: ${offset})`);
     return [];
   }
 
@@ -227,6 +226,37 @@ export class TranslationService {
 
   private generateCacheKey(request: TranslationRequest): string {
     return `${request.text}_${request.sourceLang}_${request.targetLang}_${request.context || ''}`;
+  }
+
+  // Get metrics for monitoring
+  getMetrics() {
+    return {
+      requests: this.metrics.requests.count,
+      successes: this.metrics.successes.count,
+      errors: this.metrics.errors.count
+    };
+  }
+
+  // Get cache statistics
+  getCacheStats() {
+    const now = Date.now();
+    let totalEntries = 0;
+    let expiredEntries = 0;
+
+    for (const [key, value] of this.cache.entries()) {
+      totalEntries++;
+      if (now - value.timestamp > this.CACHE_TTL) {
+        expiredEntries++;
+      }
+    }
+
+    return {
+      totalEntries,
+      expiredEntries,
+      activeEntries: totalEntries - expiredEntries,
+      cacheSize: this.cache.size,
+      ttlMinutes: this.CACHE_TTL / (1000 * 60)
+    };
   }
 
   // Clear expired cache entries
