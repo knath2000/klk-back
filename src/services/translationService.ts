@@ -13,24 +13,33 @@ export interface TranslationRequest {
 
 export interface TranslationResponse {
   definitions: Array<{
-    text?: string; // For frontend compatibility
-    meaning?: string; // For backend compatibility
-    pos: string;
-    usage: string;
+    text?: string;
+    meaning?: string;
+    partOfSpeech?: string;
+    pos?: string;
+    examples?: string[];
+    usage?: string;
   }>;
   examples: Array<{
-    es: string;
-    en: string;
-    context: string;
+    text?: string;
+    translation?: string;
+    spanish?: string;
+    english?: string;
+    context?: string;
   }>;
-  conjugations: Record<string, string[]>;
-  audio: {
-    ipa: string;
-    suggestions: string[];
+  conjugations: Record<string, unknown>;
+  audio: Array<{
+    url?: string;
+    pronunciation?: string;
+    text?: string;
+    type?: string;
+  }> | {
+    ipa?: string;
+    suggestions?: string[];
   };
   related: {
-    synonyms: string[];
-    antonyms: string[];
+    synonyms?: string[];
+    antonyms?: string[];
   };
 }
 
@@ -52,49 +61,53 @@ export class TranslationService {
   }
 
   private transformLangDBResponse(langdbResponse: any): TranslationResponse {
-    // Transform definitions: meaning → text, pos → partOfSpeech
+    // Transform definitions: LangDB returns text, partOfSpeech, meaning, examples, usage, regional
     const transformedDefinitions = langdbResponse.definitions?.map((def: any) => ({
-      text: def.meaning || def.text || '', // Prefer meaning, fallback to text if exists
-      partOfSpeech: def.pos || '',
-      examples: def.examples || [], // Already matches
-      synonyms: def.synonyms || [], // Already matches
+      text: def.text || def.meaning || '', // LangDB uses 'text' as the main field
+      meaning: def.meaning || def.text || '', // Also keep meaning for compatibility
+      partOfSpeech: def.partOfSpeech || def.pos || '', // LangDB uses 'partOfSpeech'
+      pos: def.partOfSpeech || def.pos || '', // Also keep pos for compatibility
+      examples: def.examples || [],
+      usage: def.usage || '',
     })) || [];
 
-    // Transform examples: es → spanish, en → english
+    // Transform examples: LangDB returns text, translation, context
     const transformedExamples = langdbResponse.examples?.map((ex: any) => ({
-      spanish: ex.es || ex.spanish || '',
-      english: ex.en || ex.english || '',
+      text: ex.text || '', // Original text
+      translation: ex.translation || '', // Translation
+      spanish: ex.text || '', // For frontend compatibility
+      english: ex.translation || '', // For frontend compatibility
+      context: ex.context || '',
     })) || [];
 
-    // Transform conjugations: Keep as Record, but ensure it's Record<string, string> if needed
+    // Transform conjugations: Keep as Record (LangDB returns {})
     const transformedConjugations = langdbResponse.conjugations || {};
-    // If it's simple array for nouns, map to present singular/plural
-    if (Array.isArray(transformedConjugations.present)) {
-      transformedConjugations.present = {
-        singular: transformedConjugations.present[0] || '',
-        plural: transformedConjugations.present[1] || '',
-      };
-    }
-    // For full verb conjugations, it's already Record, so no change
 
-    // Transform audio: suggestions → AudioItem array
-    const transformedAudio = (langdbResponse.audio?.suggestions || []).map((url: string) => ({
-      url,
+    // Transform audio: LangDB returns array with url, pronunciation, region
+    const transformedAudio = langdbResponse.audio?.map((audioItem: any) => ({
+      url: audioItem.url || '',
+      pronunciation: audioItem.pronunciation || '',
+      text: audioItem.pronunciation || '',
       type: 'pronunciation' as const,
-      text: langdbResponse.audio?.ipa || '',
     })) || [];
 
-    // Transform related: Flatten synonyms and antonyms to match frontend expectation
-    const transformedRelated = {
-      synonyms: langdbResponse.related?.synonyms || [],
-      antonyms: langdbResponse.related?.antonyms || [],
-    };
+    // Transform related: LangDB returns array with word, type, relation
+    const transformedRelated = langdbResponse.related?.reduce((acc: any, rel: any) => {
+      if (rel.type === 'synonym') {
+        acc.synonyms = acc.synonyms || [];
+        acc.synonyms.push(rel.word);
+      } else if (rel.type === 'antonym') {
+        acc.antonyms = acc.antonyms || [];
+        acc.antonyms.push(rel.word);
+      }
+      return acc;
+    }, { synonyms: [], antonyms: [] }) || { synonyms: [], antonyms: [] };
 
     return {
       definitions: transformedDefinitions,
       examples: transformedExamples,
       conjugations: transformedConjugations,
-      audio: transformedAudio,
+      audio: transformedAudio.length > 0 ? transformedAudio : { ipa: '', suggestions: [] },
       related: transformedRelated,
     };
   }
