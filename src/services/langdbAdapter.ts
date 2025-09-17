@@ -5,8 +5,8 @@ export class LangDBAdapter extends BaseLLMAdapter {
   private model: string;
   private activeRequests: Map<string, AbortController> = new Map();
   private activeStreams: Map<string, { reader: ReadableStreamDefaultReader<Uint8Array>; decoder: TextDecoder; controller: AbortController }> = new Map();
-  private readonly MAX_RETRIES = 5; // Increased from 3
-  private readonly RETRY_BASE_DELAY = 2000; // Increased base delay
+  private readonly MAX_RETRIES = 2; // Reduced for faster fallback
+  private readonly RETRY_BASE_DELAY = 500; // Reduced for faster retries
   private cache: Map<string, { data: any; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 1000 * 60 * 30; // 30 minutes
   private dnsCache: Map<string, { ip: string; timestamp: number }> = new Map();
@@ -69,12 +69,32 @@ export class LangDBAdapter extends BaseLLMAdapter {
     }
   }
 
-  private recordFailure(): void {
+  // Add specific 504 error detection
+  private isGatewayTimeout(error: any): boolean {
+    return error.message.includes('504') || error.message.includes('Gateway Timeout');
+  }
+
+  private recordFailure(lastError?: any): void {
     this.consecutiveFailures++;
     this.lastFailureTime = Date.now();
 
+    console.log('🔍 Circuit breaker recordFailure debug:', {
+      consecutiveFailures: this.consecutiveFailures,
+      hasLastError: !!lastError,
+      errorMessage: lastError?.message,
+      isGatewayTimeout: lastError ? this.isGatewayTimeout(lastError) : false,
+      currentState: this.circuitBreakerState
+    });
+
+    // Immediately open circuit for 504 errors (service down)
+    if (lastError && this.isGatewayTimeout(lastError)) {
+      console.log('🚫 Circuit breaker opening immediately due to 504 Gateway Timeout');
+      this.circuitBreakerState = 'open';
+      return;
+    }
+
     if (this.consecutiveFailures >= this.CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
-      console.log('🚫 Circuit breaker transitioning to open');
+      console.log('🚫 Circuit breaker transitioning to open due to failure threshold');
       this.circuitBreakerState = 'open';
     }
   }
@@ -402,7 +422,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
         });
 
         // Record failure for circuit breaker
-        this.recordFailure();
+        this.recordFailure(lastError);
 
         if (attempt < this.MAX_RETRIES) {
           const delay = this.RETRY_BASE_DELAY * Math.pow(2, attempt - 1); // Exponential backoff
@@ -593,19 +613,28 @@ Focus on accuracy and cultural context.`;
   private getFallbackTranslation(text: string, sourceLang: string, targetLang: string, context?: string): any {
     console.log('🔄 Using fallback translation for:', text, 'due to LangDB failure');
     return {
-      definitions: [
-        {
-          text: `Error: "${text}" (both services unavailable)`,
-          meaning: `Error: "${text}" (both services unavailable)`,
-          pos: 'unknown',
-          usage: 'error'
-        }
-      ],
-      examples: [],
+      definitions: [{
+        text: text,
+        partOfSpeech: 'unknown',
+        meaning: `[Service temporarily unavailable] Basic translation: ${text}`,
+        examples: [`${text} (example needed)`],
+        usage: 'unknown',
+        regional: context || 'general'
+      }],
+      examples: [{
+        text: `${text} - translation service temporarily unavailable`,
+        translation: `${text} - translation service temporarily unavailable`,
+        context: 'Service fallback mode'
+      }],
       conjugations: {},
-      audio: { ipa: '', suggestions: [] },
-      related: { synonyms: [], antonyms: [] }
+      audio: [],
+      related: []
     };
+  }
+
+  // Get circuit breaker state for health monitoring
+  getCircuitBreakerState(): string {
+    return this.circuitBreakerState;
   }
 
   cleanupCache(): void {

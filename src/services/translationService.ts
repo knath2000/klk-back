@@ -138,7 +138,7 @@ export class TranslationService {
         timeoutPromise
       ]);
 
-      console.log('✅ LangDB response received for:', request.text);
+      console.log('✅ Translation completed for:', request.text);
 
       // Transform the LangDB response to match frontend expectations
       const transformedResult = this.transformLangDBResponse(langdbResult);
@@ -160,6 +160,12 @@ export class TranslationService {
       });
       // Metrics: Increment error counter
       this.metrics.errors.inc();
+
+      // Detect LangDB 504 errors and skip to OpenRouter immediately
+      if (langdbError.message.includes('504') || langdbError.message.includes('Gateway Timeout')) {
+        console.log('🚫 LangDB 504 detected, skipping to OpenRouter fallback immediately');
+        // Jump directly to OpenRouter fallback without LangDBAdapter fallback
+      }
 
       // Early fallback to OpenRouter after first LangDB failure to avoid multiple "fetch failed" errors
       try {
@@ -234,6 +240,19 @@ export class TranslationService {
       requests: this.metrics.requests.count,
       successes: this.metrics.successes.count,
       errors: this.metrics.errors.count
+    };
+  }
+
+  // Get service health monitoring
+  getServiceHealth(): { langdb: boolean; openrouter: boolean; overall: boolean } {
+    // Quick health check - could ping endpoints or check circuit breaker state
+    const langdbHealthy = this.langdbAdapter.getCircuitBreakerState() !== 'open';
+    const openrouterHealthy = true; // Assume healthy unless proven otherwise
+
+    return {
+      langdb: langdbHealthy,
+      openrouter: openrouterHealthy,
+      overall: langdbHealthy || openrouterHealthy
     };
   }
 

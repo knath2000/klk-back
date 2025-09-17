@@ -20,6 +20,7 @@ export declare class LangDBAdapter extends BaseLLMAdapter {
     constructor(apiKey: string, baseUrl: string);
     private shouldAllowRequest;
     private recordSuccess;
+    private isGatewayTimeout;
     private recordFailure;
     private resolveDNSWithRetry;
     private getConnectionAgent;
@@ -37,6 +38,7 @@ export declare class LangDBAdapter extends BaseLLMAdapter {
       */
     translateStructured(text: string, sourceLang: string, targetLang: string, context?: string): Promise<any>;
     private getFallbackTranslation;
+    getCircuitBreakerState(): string;
     cleanupCache(): void;
     cancel(requestId: string): Promise<void>;
 }

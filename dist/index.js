@@ -52,6 +52,7 @@ const analytics_1 = __importDefault(require("./routes/analytics"));
 const collaboration_1 = __importDefault(require("./routes/collaboration"));
 const translate_1 = __importDefault(require("./routes/translate"));
 const websocket_1 = require("./services/websocket");
+const translationService_1 = require("./services/translationService");
 dotenv_1.default.config();
 // Log environment variables for debugging
 console.log('🔧 Environment Variables:', {
@@ -120,11 +121,13 @@ server.use('/api/collaboration', collaboration_1.default);
 server.use('/api/translate', translate_1.default);
 // Health check endpoint
 server.get('/api/health', (req, res) => {
+    const translationHealth = translationService_1.translationService.getServiceHealth();
     res.status(200).json({
         status: 'ok',
         timestamp: new Date().toISOString(),
         websocketInitialized: !!webSocketService,
-        translationServiceReady: true
+        translationServiceReady: true,
+        serviceStatus: translationHealth
     });
 });
 // Test LangDB endpoint for diagnostics

@@ -145,43 +145,72 @@ class WebSocketService {
         this.metrics.requests.inc();
 
         try {
+          // Validate connection state FIRST
+          if (!socket.connected) {
+            console.error('❌ Translation request from disconnected socket:', socket.id);
+            socket.emit('translation_error', { message: 'Connection lost; please retry' });
+            return;
+          }
+
           if (!data.query) {
             socket.emit('translation_error', { message: 'Query is required' });
             return;
           }
 
-          // Validate connection state
-          if (!socket.connected) {
-            console.warn('Translation request from disconnected socket:', socket.id);
-            socket.emit('translation_error', { message: 'Connection lost; please retry' });
+          // Call translation service with error handling
+          let result;
+          try {
+            result = await translationService.translate({
+              text: data.query,
+              sourceLang: data.language || 'en',
+              targetLang: 'es',
+              context: data.context,
+              userId: socket.id // Use socket ID for session
+            });
+            console.log('✅ Translation service returned result for:', data.query, 'keys:', Object.keys(result));
+          } catch (translationError: any) {
+            console.error('❌ Translation service error for', data.query, ':', translationError.message);
+            socket.emit('translation_error', { message: translationError.message || 'Translation failed' });
             return;
           }
 
-          // Call translation service
-          const result = await translationService.translate({
-            text: data.query,
-            sourceLang: data.language || 'en',
-            targetLang: 'es',
-            context: data.context,
-            userId: socket.id // Use socket ID for session
+          // Transform result to match frontend TranslationResult interface
+          const frontendResult = {
+            id: `translation-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            query: data.query,
+            definitions: result.definitions,
+            examples: result.examples,
+            conjugations: result.conjugations,
+            audio: result.audio,
+            related: result.related,
+            timestamp: Date.now()
+          };
+
+          console.log('🔄 Data transformation complete:', {
+            originalKeys: Object.keys(result),
+            frontendKeys: Object.keys(frontendResult),
+            definitionsCount: result.definitions?.length || 0,
+            examplesCount: result.examples?.length || 0
           });
 
           // Stream response (delta for partial, final for complete)
           if (transport === 'websocket') {
             // Stream deltas if websocket (implement true streaming with chunks)
-            const firstDefinition = result.definitions[0]?.meaning || 'Translation completed';
+            const firstDefinition = result.definitions[0]?.text || result.definitions[0]?.meaning || 'Translation completed';
             const chunks = firstDefinition.split(' '); // Simple word-based streaming
             chunks.forEach((chunk: string, index: number) => {
               setTimeout(() => {
-                socket.emit('translation_delta', { chunk, index, total: chunks.length });
+                socket.emit('translation_delta', { chunk, index, total: chunks.length, id: frontendResult.id });
               }, index * 100); // 100ms delay per chunk
             });
             setTimeout(() => {
-              socket.emit('translation_final', result);
+              console.log('📤 Emitting translation_final for:', frontendResult.id, 'to socket:', socket.id);
+              socket.emit('translation_final', frontendResult);
             }, chunks.length * 100 + 500);
           } else {
             // Polling-friendly: Send full result
-            socket.emit('translation_final', result);
+            console.log('📤 Emitting translation_final for:', frontendResult.id, 'to socket:', socket.id, '(polling transport)');
+            socket.emit('translation_final', frontendResult);
           }
 
           // Metrics: Increment success counter

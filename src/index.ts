@@ -20,6 +20,7 @@ import translateRouter from './routes/translate';
 import { getSupabase } from './services/db';
 import { collaborationService } from './services/collaborationService';
 import { initializeWebSocket } from './services/websocket';
+import { translationService } from './services/translationService';
 
 dotenv.config();
 
@@ -99,11 +100,14 @@ server.use('/api/translate', translateRouter);
 
 // Health check endpoint
 server.get('/api/health', (req, res) => {
+  const translationHealth = translationService.getServiceHealth();
+
   res.status(200).json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     websocketInitialized: !!webSocketService,
-    translationServiceReady: true
+    translationServiceReady: true,
+    serviceStatus: translationHealth
   });
 });
 
