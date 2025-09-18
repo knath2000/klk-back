@@ -68,7 +68,7 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             model = 'openai/gpt-5-mini';
         }
         this.model = model;
-        console.log('LangDBAdapter initialized with tenant URL:', baseUrl, 'model:', model);
+        console.log('LangDBAdapter initialized with tenant URL:', baseUrl.trim(), 'model:', model);
     }
     // Circuit breaker implementation
     shouldAllowRequest() {
@@ -215,21 +215,65 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             if (!isGpt5Mini) {
                 bodyParams.temperature = 0.7;
             }
-            // Use native fetch (Node.js 18+) with CloudFront-aware headers for proxy compatibility
-            response = await fetch(`${this.baseUrl}/chat/completions`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.apiKey}`,
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'KLK-App/1.0',
-                    'Cache-Control': 'no-cache',
-                    'Connection': 'keep-alive',
-                    'Keep-Alive': 'timeout=30, max=1000',
-                },
-                body: JSON.stringify(bodyParams),
-                signal: controller.signal,
+            // Log request details for debugging
+            console.log('🔍 StreamCompletion request details:', {
+                url: `${this.baseUrl}/chat/completions`,
+                bodySize: JSON.stringify(bodyParams).length,
+                headers: { Authorization: '[REDACTED]', 'Content-Type': 'application/json', 'User-Agent': 'KLK-App/1.0' },
+                stream: true,
+                model: options.model,
+                messageCount: messages.length,
+                totalTokensEst: JSON.stringify(messages).length + 1000, // Approximate
+                requestId: options.requestId
             });
+            // Use native fetch with retry logic for streaming
+            let response = null;
+            let lastError = null;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    console.log(`🔄 StreamCompletion fetch attempt ${attempt}/3 for ${options.requestId}`);
+                    response = await fetch(`${this.baseUrl}/chat/completions`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${this.apiKey}`,
+                            'Content-Type': 'application/json',
+                            'User-Agent': 'KLK-App/1.0',
+                            'Cache-Control': 'no-cache',
+                            'Connection': 'keep-alive',
+                            'Keep-Alive': 'timeout=30, max=1000',
+                        },
+                        body: JSON.stringify(bodyParams),
+                        signal: controller.signal,
+                    });
+                    // Success, break retry loop
+                    break;
+                }
+                catch (error) {
+                    lastError = error;
+                    console.error(`❌ StreamCompletion fetch attempt ${attempt} failed:`, error.message);
+                    // Don't retry on abort or non-network errors
+                    if (error.name === 'AbortError' || !error.message.includes('fetch failed')) {
+                        throw error;
+                    }
+                    if (attempt < 3) {
+                        const delay = 1000 * Math.pow(2, attempt - 1); // Exponential backoff: 1s, 2s
+                        console.log(`⏳ Retrying stream fetch in ${delay}ms...`);
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    }
+                }
+            }
+            if (!response) {
+                throw lastError || new Error('All stream fetch attempts failed');
+            }
             clearTimeout(timeoutId);
+            // Log response details
+            console.log('🔍 StreamCompletion response details:', {
+                status: response.status,
+                statusText: response.statusText,
+                contentType: response.headers.get('content-type'),
+                contentLength: response.headers.get('content-length'),
+                requestId: options.requestId
+            });
             if (!response.ok) {
                 const errorText = await response.text();
                 throw new Error(`LangDB API error: ${response.status} ${errorText}`);
@@ -464,10 +508,44 @@ CRITICAL: Output ONLY JSON. Include regional variations if context provided. Con
             { role: 'user', content: userPrompt }
         ];
         const options = {
-            model: 'openai/gpt-5-mini',
+            model: 'gpt-4o-mini', // Use gpt-4o-mini for better streaming reliability
             timeout: 120000, // Increased to 120s for structured output
             requestId: `translate_${Date.now()}`
         };
+        // Check payload size - fallback to OpenRouter if too large for streaming
+        const payloadSize = JSON.stringify(messages).length;
+        if (payloadSize > 10000) {
+            console.log(`📏 Payload size ${payloadSize} > 10000, falling back to OpenRouter for ${text}`);
+            // Immediate fallback to OpenRouter
+            try {
+                const openRouterAdapter = new openrouterAdapter_1.OpenRouterAdapter(process.env.OPENROUTER_API_KEY || '', process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1');
+                const systemPrompt = `You are a precise Spanish-English translator. Output ONLY JSON: {
+"definitions": [{"meaning": "string", "pos": "noun|verb|adj|adv", "usage": "formal|informal|slang"}],
+"examples": [{"es": "Spanish example", "en": "English example", "context": "usage context"}],
+"conjugations": {"present": ["yo form", "tú form", ...], "past": [...]},
+"audio": {"ipa": "phonetic", "suggestions": ["audio suggestions"]},
+"related": {"synonyms": ["syn1"], "antonyms": ["ant1"]}
+}. Use regional variants if context provided.`;
+                const userPrompt = `Translate "${text}" from ${sourceLang} to ${targetLang}${context ? ` with ${context} context` : ''}.`;
+                const messages = [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ];
+                const options = {
+                    model: 'gpt-4o-mini',
+                    timeout: 30000,
+                    requestId: `fallback_${Date.now()}`
+                };
+                const rawResult = await openRouterAdapter.fetchCompletion(messages, options);
+                const fallbackResult = JSON.parse(rawResult);
+                console.log('✅ OpenRouter payload fallback success for:', text);
+                return fallbackResult;
+            }
+            catch (fallbackError) {
+                console.error('❌ OpenRouter payload fallback also failed for', text, ':', fallbackError.message);
+                return this.getFallbackTranslation(text, sourceLang, targetLang, context);
+            }
+        }
         try {
             // Use fetchCompletion with optimized headers and timeout to avoid 504
             const rawResponse = await this.fetchCompletion(messages, options);
