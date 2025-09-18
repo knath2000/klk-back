@@ -14,7 +14,9 @@ export declare class LangDBAdapter extends BaseLLMAdapter {
     private readonly CONNECTION_POOL_TTL;
     private circuitBreakerState;
     private consecutiveFailures;
+    private consecutive504Failures;
     private readonly CIRCUIT_BREAKER_FAILURE_THRESHOLD;
+    private readonly CIRCUIT_BREAKER_504_THRESHOLD;
     private readonly CIRCUIT_BREAKER_TIMEOUT;
     private lastFailureTime;
     constructor(apiKey: string, baseUrl: string);

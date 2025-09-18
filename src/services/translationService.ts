@@ -153,16 +153,16 @@ export class TranslationService {
 
       console.log('✅ Translation completed for:', request.text);
 
-      // Transform the LangDB response to match frontend expectations
-      const transformedResult = this.transformLangDBResponse(langdbResult);
+      // LangDB now returns structured JSON directly (transformed in adapter)
+      const result = langdbResult as TranslationResponse;
 
-      // Cache the transformed result
-      this.cache.set(cacheKey, { data: transformedResult, timestamp: Date.now() });
+      // Cache the result
+      this.cache.set(cacheKey, { data: result, timestamp: Date.now() });
 
       // Metrics: Increment success counter
       this.metrics.successes.inc();
 
-      return transformedResult;
+      return result;
     } catch (langdbError: any) {
       console.error('❌ LangDB failed for', request.text, ':', langdbError.message);
       console.error('LangDB error details:', {

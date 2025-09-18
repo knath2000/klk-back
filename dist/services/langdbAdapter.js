@@ -50,7 +50,9 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
         this.CONNECTION_POOL_TTL = 1000 * 60 * 10; // 10 minutes
         this.circuitBreakerState = 'closed';
         this.consecutiveFailures = 0;
+        this.consecutive504Failures = 0; // Separate counter for 504 errors
         this.CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
+        this.CIRCUIT_BREAKER_504_THRESHOLD = 3; // Allow 3 retries for 504 before opening
         this.CIRCUIT_BREAKER_TIMEOUT = 1000 * 60 * 2; // 2 minutes
         this.lastFailureTime = 0;
         if (!apiKey) {
@@ -89,6 +91,7 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
     }
     recordSuccess() {
         this.consecutiveFailures = 0;
+        this.consecutive504Failures = 0; // Reset 504 counter on success
         if (this.circuitBreakerState === 'half-open') {
             console.log('✅ Circuit breaker transitioning to closed');
             this.circuitBreakerState = 'closed';
@@ -103,19 +106,27 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
         this.lastFailureTime = Date.now();
         console.log('🔍 Circuit breaker recordFailure debug:', {
             consecutiveFailures: this.consecutiveFailures,
+            consecutive504Failures: this.consecutive504Failures,
             hasLastError: !!lastError,
             errorMessage: lastError?.message,
             isGatewayTimeout: lastError ? this.isGatewayTimeout(lastError) : false,
             currentState: this.circuitBreakerState
         });
-        // Immediately open circuit for 504 errors (service down)
+        // Handle 504 errors with separate retry logic
         if (lastError && this.isGatewayTimeout(lastError)) {
-            console.log('🚫 Circuit breaker opening immediately due to 504 Gateway Timeout');
-            this.circuitBreakerState = 'open';
+            this.consecutive504Failures++;
+            console.log(`🚫 504 Gateway Timeout detected (${this.consecutive504Failures}/${this.CIRCUIT_BREAKER_504_THRESHOLD})`);
+            // Only open circuit after 3 consecutive 504 failures
+            if (this.consecutive504Failures >= this.CIRCUIT_BREAKER_504_THRESHOLD) {
+                console.log('🚫 Circuit breaker opening due to 504 threshold exceeded');
+                this.circuitBreakerState = 'open';
+            }
             return;
         }
+        // Reset 504 counter on non-504 failures
+        this.consecutive504Failures = 0;
         if (this.consecutiveFailures >= this.CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
-            console.log('🚫 Circuit breaker transitioning to open due to failure threshold');
+            console.log('🚫 Circuit breaker transitioning to open due to general failure threshold');
             this.circuitBreakerState = 'open';
         }
     }
@@ -186,7 +197,7 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
         let controller = new AbortController();
         try {
             // Environment-based timeout
-            const timeoutMs = parseInt(process.env.LANGDB_TIMEOUT || '90000');
+            const timeoutMs = parseInt(process.env.LANGDB_TIMEOUT || '120000');
             const timeoutId = setTimeout(() => {
                 console.warn(`Request ${requestId} timed out, aborting...`);
                 controller.abort();
@@ -203,12 +214,16 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             if (!isGpt5Mini) {
                 bodyParams.temperature = 0.7;
             }
-            // Use native fetch (Node.js 18+) with default keep-alive (undici handles internally)
+            // Use native fetch (Node.js 18+) with CloudFront-aware headers for proxy compatibility
             response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
                     'Content-Type': 'application/json',
+                    'User-Agent': 'KLK-App/1.0',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'Keep-Alive': 'timeout=30, max=1000',
                 },
                 body: JSON.stringify(bodyParams),
                 signal: controller.signal,
@@ -321,7 +336,7 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
             try {
                 console.log(`🔄 LangDB fetch attempt ${attempt}/${this.MAX_RETRIES} for ${requestId}: ${this.baseUrl}/chat/completions`);
                 // Add timeout to prevent hanging requests
-                const timeoutMs = parseInt(process.env.LANGDB_TIMEOUT || '90000');
+                const timeoutMs = parseInt(process.env.LANGDB_TIMEOUT || '120000');
                 const timeoutId = setTimeout(() => {
                     console.warn(`Request ${requestId} attempt ${attempt} timed out, aborting...`);
                     controller.abort();
@@ -358,6 +373,10 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
                     headers: {
                         'Authorization': `Bearer ${this.apiKey}`,
                         'Content-Type': 'application/json',
+                        'User-Agent': 'KLK-App/1.0',
+                        'Cache-Control': 'no-cache',
+                        'Connection': 'keep-alive',
+                        'Keep-Alive': 'timeout=30, max=1000',
                     },
                     body: JSON.stringify(bodyParams),
                     signal: controller.signal,
@@ -425,152 +444,88 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
       * @returns Promise resolving to structured translation JSON
       */
     async translateStructured(text, sourceLang, targetLang, context) {
-        // Enhanced system prompt with detailed instructions for structured output
-        const systemPrompt = `You are an expert Spanish-English translator specializing in comprehensive linguistic analysis. You must output ONLY valid JSON with this exact structure:
+        // Optimized system prompt with essential JSON schema (trimmed for faster generation)
+        const systemPrompt = `You are an expert Spanish-English translator. Output ONLY valid JSON:
 
 {
-  "definitions": [
-    {
-      "text": "exact word/phrase being defined",
-      "partOfSpeech": "noun|verb|adjective|adverb|interjection|conjunction|preposition",
-      "meaning": "clear English definition",
-      "examples": ["example sentence 1", "example sentence 2"],
-      "usage": "formal|informal|slang|colloquial|literary",
-      "regional": "general|mexico|argentina|spain|colombia|etc"
-    }
-  ],
-  "examples": [
-    {
-      "text": "original Spanish text",
-      "translation": "English translation",
-      "context": "brief usage context or situation"
-    }
-  ],
-  "conjugations": {
-    "tense": {
-      "yo": "first person singular",
-      "tú": "second person singular informal",
-      "él/ella": "third person singular",
-      "nosotros": "first person plural",
-      "vosotros": "second person plural informal (Spain)",
-      "ellos/ellas": "third person plural"
-    }
-  },
-  "audio": [
-    {
-      "url": "suggested audio file path or URL",
-      "pronunciation": "IPA phonetic transcription",
-      "region": "accent/dialect specification"
-    }
-  ],
-  "related": [
-    {
-      "word": "related word",
-      "type": "synonym|antonym|related|cognate",
-      "relation": "brief explanation of relationship"
-    }
-  ]
+  "definitions": [{"text": "word", "partOfSpeech": "noun|verb|adj", "meaning": "definition", "examples": ["ex1"], "usage": "formal|informal", "regional": "general"}],
+  "examples": [{"text": "Spanish", "translation": "English", "context": "usage"}],
+  "conjugations": {"tense": {"yo": "form", "tú": "form"}},
+  "audio": [{"url": "url", "pronunciation": "IPA", "region": "accent"}],
+  "related": [{"word": "word", "type": "synonym", "relation": "explanation"}]
 }
 
-CRITICAL INSTRUCTIONS:
-1. Output ONLY valid JSON - no markdown, no explanations, no additional text
-2. Include regional variations when context is provided (e.g., Mexican Spanish uses different vocabulary)
-3. Provide multiple definitions if the word has different meanings
-4. Include conjugations only for verbs, set to empty object {} for non-verbs
-5. Always include at least 2-3 examples with natural usage
-6. Use accurate IPA pronunciation when possible
-7. Include synonyms, antonyms, and related terms when relevant
-8. Consider formality levels and usage contexts`;
-        // Enhanced user prompt with specific instructions
-        const userPrompt = `Translate and analyze: "${text}"
-
-Language pair: ${sourceLang} → ${targetLang}
-${context ? `Regional context: ${context} Spanish variant` : 'General Spanish context'}
-
-Provide comprehensive analysis including:
-- Multiple definitions with part of speech
-- Natural usage examples
-- Verb conjugations (if applicable)
-- Pronunciation guidance
-- Related words and synonyms
-- Regional variations and formality levels
-
-Focus on accuracy and cultural context.`;
+CRITICAL: Output ONLY JSON. Include regional variations if context provided. Conjugations only for verbs. At least 2 examples.`;
+        // Concise user prompt
+        const userPrompt = `Translate "${text}" from ${sourceLang} to ${targetLang}${context ? ` with ${context} context` : ''}. Provide definitions, examples, conjugations (verbs only), audio, related terms.`;
         const messages = [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt }
         ];
         const options = {
             model: 'openai/gpt-5-mini',
-            timeout: 90000,
+            timeout: 120000, // Increased to 120s for structured output
             requestId: `translate_${Date.now()}`
         };
         try {
-            const response = await this.fetchCompletion(messages, options);
-            if (!response || response.trim() === '') {
-                console.warn('Empty response from LangDB for translation:', text);
+            // Use streaming for progressive chunking to avoid 504 timeouts
+            const stream = this.streamCompletion(messages, options);
+            let fullResponse = '';
+            let isDone = false;
+            for await (const chunk of stream) {
+                if (chunk.isFinal) {
+                    isDone = true;
+                    break;
+                }
+                if (chunk.deltaText) {
+                    fullResponse += chunk.deltaText;
+                }
+            }
+            if (!isDone || !fullResponse.trim()) {
+                console.warn('Empty or incomplete streaming response from LangDB for translation:', text);
                 return this.getFallbackTranslation(text, sourceLang, targetLang, context);
             }
             // Log raw response for debugging
-            console.log('Raw LangDB translation response:', response.substring(0, 500) + (response.length > 500 ? '...' : ''));
+            console.log('Raw LangDB translation response (streaming):', fullResponse.substring(0, 500) + (fullResponse.length > 500 ? '...' : ''));
             try {
-                // Clean the response by removing any potential markdown or extra text
-                let cleanResponse = response.trim();
-                // Remove potential markdown code blocks
+                // Clean and parse JSON
+                let cleanResponse = fullResponse.trim();
                 if (cleanResponse.startsWith('```json')) {
                     cleanResponse = cleanResponse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
                 }
                 else if (cleanResponse.startsWith('```')) {
                     cleanResponse = cleanResponse.replace(/^```\s*/, '').replace(/\s*```$/, '');
                 }
-                // Parse the cleaned JSON response
                 const structured = JSON.parse(cleanResponse);
-                // Enhanced validation with detailed error reporting
+                // Validation
                 const validationErrors = [];
-                if (!structured.definitions || !Array.isArray(structured.definitions)) {
-                    validationErrors.push('definitions must be an array');
-                }
-                if (!structured.examples || !Array.isArray(structured.examples)) {
-                    validationErrors.push('examples must be an array');
-                }
-                if (!structured.conjugations || typeof structured.conjugations !== 'object') {
-                    validationErrors.push('conjugations must be an object');
-                }
-                if (!structured.audio || !Array.isArray(structured.audio)) {
-                    validationErrors.push('audio must be an array');
-                }
-                if (!structured.related || !Array.isArray(structured.related)) {
-                    validationErrors.push('related must be an array');
-                }
+                if (!structured.definitions || !Array.isArray(structured.definitions))
+                    validationErrors.push('definitions array');
+                if (!structured.examples || !Array.isArray(structured.examples))
+                    validationErrors.push('examples array');
+                if (!structured.conjugations || typeof structured.conjugations !== 'object')
+                    validationErrors.push('conjugations object');
+                if (!structured.audio || !Array.isArray(structured.audio))
+                    validationErrors.push('audio array');
+                if (!structured.related || !Array.isArray(structured.related))
+                    validationErrors.push('related array');
                 if (validationErrors.length === 0) {
-                    console.log('✅ Valid structured translation parsed from LangDB');
+                    console.log('✅ Valid structured translation parsed from LangDB streaming');
                     return structured;
                 }
                 else {
-                    console.warn('Invalid LangDB structure:', validationErrors.join(', '));
-                    console.warn('Received structure:', {
-                        hasDefinitions: !!structured.definitions,
-                        definitionsType: Array.isArray(structured.definitions) ? 'array' : typeof structured.definitions,
-                        hasExamples: !!structured.examples,
-                        examplesType: Array.isArray(structured.examples) ? 'array' : typeof structured.examples,
-                        hasConjugations: !!structured.conjugations,
-                        conjugationsType: typeof structured.conjugations,
-                        hasAudio: !!structured.audio,
-                        audioType: Array.isArray(structured.audio) ? 'array' : typeof structured.audio,
-                        hasRelated: !!structured.related,
-                        relatedType: Array.isArray(structured.related) ? 'array' : typeof structured.related
-                    });
+                    console.warn('Invalid LangDB structure from streaming:', validationErrors.join(', '));
                     return this.getFallbackTranslation(text, sourceLang, targetLang, context);
                 }
             }
             catch (parseError) {
-                console.error('JSON parse error in translateStructured:', parseError instanceof Error ? parseError.message : String(parseError));
-                console.error('Raw response that failed to parse:', response.substring(0, 1000));
+                console.error('JSON parse error in translateStructured streaming:', parseError instanceof Error ? parseError.message : String(parseError));
+                console.error('Raw streaming response that failed to parse:', fullResponse.substring(0, 1000));
                 return this.getFallbackTranslation(text, sourceLang, targetLang, context);
             }
         }
         catch (error) {
-            console.error('Translation fetch error:', error.message, error.stack);
+            console.error('Translation streaming error:', error.message, error.stack);
             return this.getFallbackTranslation(text, sourceLang, targetLang, context);
         }
     }
