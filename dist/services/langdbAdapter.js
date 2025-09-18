@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.translationService = exports.LangDBAdapter = void 0;
 const llmAdapter_1 = require("./llmAdapter");
+const openrouterAdapter_1 = require("./openrouterAdapter");
 class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
     constructor(apiKey, baseUrl) {
         super(apiKey, baseUrl);
@@ -468,28 +469,17 @@ CRITICAL: Output ONLY JSON. Include regional variations if context provided. Con
             requestId: `translate_${Date.now()}`
         };
         try {
-            // Use streaming for progressive chunking to avoid 504 timeouts
-            const stream = this.streamCompletion(messages, options);
-            let fullResponse = '';
-            let isDone = false;
-            for await (const chunk of stream) {
-                if (chunk.isFinal) {
-                    isDone = true;
-                    break;
-                }
-                if (chunk.deltaText) {
-                    fullResponse += chunk.deltaText;
-                }
-            }
-            if (!isDone || !fullResponse.trim()) {
-                console.warn('Empty or incomplete streaming response from LangDB for translation:', text);
+            // Use fetchCompletion with optimized headers and timeout to avoid 504
+            const rawResponse = await this.fetchCompletion(messages, options);
+            if (!rawResponse || rawResponse.trim() === '') {
+                console.warn('Empty response from LangDB for translation:', text);
                 return this.getFallbackTranslation(text, sourceLang, targetLang, context);
             }
             // Log raw response for debugging
-            console.log('Raw LangDB translation response (streaming):', fullResponse.substring(0, 500) + (fullResponse.length > 500 ? '...' : ''));
+            console.log('Raw LangDB translation response:', rawResponse.substring(0, 500) + (rawResponse.length > 500 ? '...' : ''));
             try {
                 // Clean and parse JSON
-                let cleanResponse = fullResponse.trim();
+                let cleanResponse = rawResponse.trim();
                 if (cleanResponse.startsWith('```json')) {
                     cleanResponse = cleanResponse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
                 }
@@ -510,23 +500,52 @@ CRITICAL: Output ONLY JSON. Include regional variations if context provided. Con
                 if (!structured.related || !Array.isArray(structured.related))
                     validationErrors.push('related array');
                 if (validationErrors.length === 0) {
-                    console.log('✅ Valid structured translation parsed from LangDB streaming');
+                    console.log('✅ Valid structured translation parsed from LangDB');
                     return structured;
                 }
                 else {
-                    console.warn('Invalid LangDB structure from streaming:', validationErrors.join(', '));
+                    console.warn('Invalid LangDB structure:', validationErrors.join(', '));
                     return this.getFallbackTranslation(text, sourceLang, targetLang, context);
                 }
             }
             catch (parseError) {
-                console.error('JSON parse error in translateStructured streaming:', parseError instanceof Error ? parseError.message : String(parseError));
-                console.error('Raw streaming response that failed to parse:', fullResponse.substring(0, 1000));
+                console.error('JSON parse error in translateStructured:', parseError instanceof Error ? parseError.message : String(parseError));
+                console.error('Raw response that failed to parse:', rawResponse.substring(0, 1000));
                 return this.getFallbackTranslation(text, sourceLang, targetLang, context);
             }
         }
         catch (error) {
-            console.error('Translation streaming error:', error.message, error.stack);
-            return this.getFallbackTranslation(text, sourceLang, targetLang, context);
+            console.error('Translation fetch error:', error.message, error.stack);
+            // Immediate fallback to OpenRouter on any LangDB failure
+            try {
+                console.log('🔄 LangDB failed, implementing immediate fallback to OpenRouter for', text);
+                const openRouterAdapter = new openrouterAdapter_1.OpenRouterAdapter(process.env.OPENROUTER_API_KEY || '', process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1');
+                const systemPrompt = `You are a precise Spanish-English translator. Output ONLY JSON: {
+"definitions": [{"meaning": "string", "pos": "noun|verb|adj|adv", "usage": "formal|informal|slang"}],
+"examples": [{"es": "Spanish example", "en": "English example", "context": "usage context"}],
+"conjugations": {"present": ["yo form", "tú form", ...], "past": [...]},
+"audio": {"ipa": "phonetic", "suggestions": ["audio suggestions"]},
+"related": {"synonyms": ["syn1"], "antonyms": ["ant1"]}
+}. Use regional variants if context provided.`;
+                const userPrompt = `Translate "${text}" from ${sourceLang} to ${targetLang}${context ? ` with ${context} context` : ''}.`;
+                const messages = [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ];
+                const options = {
+                    model: 'gpt-4o-mini',
+                    timeout: 30000,
+                    requestId: `fallback_${Date.now()}`
+                };
+                const rawResult = await openRouterAdapter.fetchCompletion(messages, options);
+                const fallbackResult = JSON.parse(rawResult);
+                console.log('✅ OpenRouter immediate fallback success for:', text);
+                return fallbackResult;
+            }
+            catch (fallbackError) {
+                console.error('❌ OpenRouter immediate fallback also failed for', text, ':', fallbackError.message);
+                return this.getFallbackTranslation(text, sourceLang, targetLang, context);
+            }
         }
     }
     getFallbackTranslation(text, sourceLang, targetLang, context) {
