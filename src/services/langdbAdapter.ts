@@ -42,7 +42,7 @@ export class LangDBAdapter extends BaseLLMAdapter {
     console.log('LangDBAdapter initialized with tenant URL:', baseUrl.trim(), 'model:', model);
   }
 
-  // Circuit breaker implementation
+  // Circuits breaker implementation
   private shouldAllowRequest(): boolean {
     const now = Date.now();
 

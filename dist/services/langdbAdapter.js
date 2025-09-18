@@ -70,7 +70,7 @@ class LangDBAdapter extends llmAdapter_1.BaseLLMAdapter {
         this.model = model;
         console.log('LangDBAdapter initialized with tenant URL:', baseUrl.trim(), 'model:', model);
     }
-    // Circuit breaker implementation
+    // Circuits breaker implementation
     shouldAllowRequest() {
         const now = Date.now();
         switch (this.circuitBreakerState) {
