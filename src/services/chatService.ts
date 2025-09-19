@@ -1,5 +1,5 @@
 import { personaService } from './personaService';
-import { LangDBAdapter } from './langdbAdapter';
+import { OpenRouterAdapter } from './openrouterAdapter';
 import { ILLMAdapter } from './llmAdapter';
 import {
   Persona,

@@ -100,28 +100,25 @@ server.use('/api/translate', translateRouter);
 
 // Health check endpoint
 server.get('/api/health', (req, res) => {
-  const translationHealth = translationService.getServiceHealth();
-
   res.status(200).json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     websocketInitialized: !!webSocketService,
     translationServiceReady: true,
-    serviceStatus: translationHealth
+    openRouterReady: !!process.env.OPENROUTER_API_KEY
   });
 });
 
-// Test LangDB endpoint for diagnostics
-server.get('/api/test-langdb', async (req, res) => {
+server.get('/api/test-openrouter', async (req, res) => {
   try {
-    const { LangDBAdapter } = await import('./services/langdbAdapter');
-    const langdbAdapter = new LangDBAdapter(
-      process.env.LANGDB_API_KEY || '',
-      process.env.LANGDB_GATEWAY_URL || ''
+    const { OpenRouterAdapter } = await import('./services/openrouterAdapter');
+    const openRouterAdapter = new OpenRouterAdapter(
+      process.env.OPENROUTER_API_KEY || '',
+      process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
     );
     const testMessages: LLMMessage[] = [{ role: 'user', content: 'test' }];
-    const options = { model: 'openai/gpt-5-mini', timeout: 10000 };
-    const result = await langdbAdapter.fetchCompletion(testMessages, options);
+    const options = { model: process.env.OPENROUTER_MODEL || 'gpt-4o-mini', timeout: 10000 };
+    const result = await openRouterAdapter.fetchCompletion(testMessages, options);
     res.json({ status: 'success', response: result.substring(0, 100) });
   } catch (error: any) {
     res.status(500).json({
@@ -129,8 +126,9 @@ server.get('/api/test-langdb', async (req, res) => {
       error: error?.message || 'Unknown error',
       stack: error?.stack || 'No stack trace',
       env: {
-        LANGDB_GATEWAY_URL: process.env.LANGDB_GATEWAY_URL,
-        LANGDB_API_KEY: process.env.LANGDB_API_KEY ? '[REDACTED]' : 'MISSING'
+        OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL,
+        OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? '[REDACTED]' : 'MISSING',
+        OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || 'gpt-4o-mini'
       }
     });
   }

@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import { LLMMessage, LLMOptions } from '../types';
-import { LangDBAdapter } from './langdbAdapter';
+import { OpenRouterAdapter } from './openrouterAdapter';
 import { personaService } from './personaService';
 import { collaborationService } from './collaborationService';
 import { conversationService } from './conversationService';
@@ -286,20 +286,20 @@ class WebSocketService {
             { role: 'user', content: data.message }
           ];
 
-          // Use LangDB for chat
-          const langdbAdapter = new LangDBAdapter(
-            process.env.LANGDB_API_KEY || '',
-            process.env.LANGDB_GATEWAY_URL || 'https://api.us-east-1.langdb.ai/v1'
+          // Use OpenRouter for chat
+          const openRouterAdapter = new OpenRouterAdapter(
+            process.env.OPENROUTER_API_KEY || '',
+            process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
           );
 
           const options: LLMOptions = {
-            model: 'openai/gpt-5-mini',
+            model: process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
             timeout: 30000,
             requestId: data.message_id
           };
 
           // Stream response
-          const stream = langdbAdapter.streamCompletion(messages, options);
+          const stream = openRouterAdapter.streamCompletion(messages, options);
           let fullContent = '';
 
           for await (const chunk of stream) {

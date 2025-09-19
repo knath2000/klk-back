@@ -1,5 +1,4 @@
 import { LLMMessage, LLMOptions } from '../types';
-import { LangDBAdapter } from './langdbAdapter';
 import { OpenRouterAdapter } from './openrouterAdapter';
 import { personaService } from './personaService';
 
@@ -44,7 +43,7 @@ export interface TranslationResponse {
 }
 
 export class TranslationService {
-  private langdbAdapter: LangDBAdapter;
+  private openRouterAdapter: OpenRouterAdapter;
   private cache: Map<string, { data: TranslationResponse; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 1000 * 60 * 30; // 30 minutes
   private metrics = {
@@ -53,62 +52,21 @@ export class TranslationService {
     errors: { count: 0, inc: () => this.metrics.errors.count++ }
   };
 
-  constructor(langdbAdapter: LangDBAdapter) {
-    this.langdbAdapter = langdbAdapter;
+  constructor(openRouterAdapter: OpenRouterAdapter) {
+    this.openRouterAdapter = openRouterAdapter;
     // Log env vars to verify loading
-    console.log('TranslationService initialized with LANGDB_GATEWAY_URL:', process.env.LANGDB_GATEWAY_URL || 'DEFAULT (generic)');
-    console.log('LANGDB_MODEL:', process.env.LANGDB_MODEL || 'DEFAULT (gpt-4o-mini)');
+    console.log('TranslationService initialized with OPENROUTER_BASE_URL:', process.env.OPENROUTER_BASE_URL || 'DEFAULT (openrouter.ai)');
+    console.log('OPENROUTER_MODEL:', process.env.OPENROUTER_MODEL || 'DEFAULT (gpt-4o-mini)');
   }
 
-  private transformLangDBResponse(langdbResponse: any): TranslationResponse {
-    // Transform definitions: LangDB returns text, partOfSpeech, meaning, examples, usage, regional
-    const transformedDefinitions = langdbResponse.definitions?.map((def: any) => ({
-      text: def.text || def.meaning || '', // LangDB uses 'text' as the main field
-      meaning: def.meaning || def.text || '', // Also keep meaning for compatibility
-      partOfSpeech: def.partOfSpeech || def.pos || '', // LangDB uses 'partOfSpeech'
-      pos: def.partOfSpeech || def.pos || '', // Also keep pos for compatibility
-      examples: def.examples || [],
-      usage: def.usage || '',
-    })) || [];
-
-    // Transform examples: LangDB returns text, translation, context
-    const transformedExamples = langdbResponse.examples?.map((ex: any) => ({
-      text: ex.text || '', // Original text
-      translation: ex.translation || '', // Translation
-      spanish: ex.text || '', // For frontend compatibility
-      english: ex.translation || '', // For frontend compatibility
-      context: ex.context || '',
-    })) || [];
-
-    // Transform conjugations: Keep as Record (LangDB returns {})
-    const transformedConjugations = langdbResponse.conjugations || {};
-
-    // Transform audio: LangDB returns array with url, pronunciation, region
-    const transformedAudio = langdbResponse.audio?.map((audioItem: any) => ({
-      url: audioItem.url || '',
-      pronunciation: audioItem.pronunciation || '',
-      text: audioItem.pronunciation || '',
-      type: 'pronunciation' as const,
-    })) || [];
-
-    // Transform related: LangDB returns array with word, type, relation
-    const transformedRelated = langdbResponse.related?.reduce((acc: any, rel: any) => {
-      if (rel.type === 'synonym') {
-        acc.synonyms = acc.synonyms || [];
-        acc.synonyms.push(rel.word);
-      } else if (rel.type === 'antonym') {
-        acc.antonyms = acc.antonyms || [];
-        acc.antonyms.push(rel.word);
-      }
-      return acc;
-    }, { synonyms: [], antonyms: [] }) || { synonyms: [], antonyms: [] };
-
+  private transformOpenRouterResponse(openRouterResponse: any): TranslationResponse {
+    // OpenRouter returns structured JSON directly, light transformation for compatibility
     return {
-      definitions: transformedDefinitions,
-      examples: transformedExamples,
-      conjugations: transformedConjugations,
-      audio: transformedAudio.length > 0 ? transformedAudio : { ipa: '', suggestions: [] },
-      related: transformedRelated,
+      definitions: openRouterResponse.definitions || [],
+      examples: openRouterResponse.examples || [],
+      conjugations: openRouterResponse.conjugations || {},
+      audio: openRouterResponse.audio || { ipa: '', suggestions: [] },
+      related: openRouterResponse.related || { synonyms: [], antonyms: [] }
     };
   }
 
@@ -136,25 +94,62 @@ export class TranslationService {
     }
 
     try {
-      // Log before LangDB call
-      console.log('📤 Calling LangDB for translation:', { text: request.text, sourceLang: request.sourceLang, targetLang: request.targetLang });
+      // Log before OpenRouter call
+      console.log('📤 Calling OpenRouter for translation:', { text: request.text, sourceLang: request.sourceLang, targetLang: request.targetLang });
 
-      // Call LangDB with timeout
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('LangDB timeout')), 300000)); // Increased to 300 seconds for gpt-5-mini processing
-      const langdbResult = await Promise.race([
-        this.langdbAdapter.translateStructured(
-          request.text,
-          request.sourceLang,
-          request.targetLang,
-          regionalContext
-        ),
-        timeoutPromise
-      ]);
+      const systemPrompt = `You are a precise Spanish-English translator. Output ONLY valid JSON matching this exact structure without any additional text or explanations:
+
+{
+  "definitions": [
+    {
+      "meaning": "primary meaning in target language",
+      "pos": "noun|verb|adjective|adverb",
+      "usage": "formal|informal|slang|regional",
+      "examples": ["example sentence 1", "example sentence 2"]
+    }
+  ],
+  "examples": [
+    {
+      "es": "Spanish example sentence",
+      "en": "English translation of example",
+      "context": "usage context or notes"
+    }
+  ],
+  "conjugations": {
+    "present": ["yo form", "tú form", "él/ella/usted form", "nosotros form", "vosotros form", "ellos/ellas/ustedes form"],
+    "preterite": ["preterite forms"],
+    "future": ["future forms"]
+  },
+  "audio": {
+    "ipa": "international phonetic alphabet transcription",
+    "suggestions": ["pronunciation tips or audio notes"]
+  },
+  "related": {
+    "synonyms": ["synonym1", "synonym2"],
+    "antonyms": ["antonym1"]
+  }
+}
+
+Incorporate regional context if provided: ${regionalContext || 'general Spanish'}. Ensure all fields are populated appropriately for the word "${request.text}" from ${request.sourceLang} to ${request.targetLang}.`;
+
+      const userPrompt = `Provide detailed translation and linguistic breakdown for the word/phrase "${request.text}".`;
+
+      const messages: LLMMessage[] = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ];
+
+      const options: LLMOptions = {
+        model: process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
+        timeout: 30000,
+        requestId: `translate_${Date.now()}`
+      };
+
+      const rawResult = await this.openRouterAdapter.fetchCompletion(messages, options);
+      const parsedResult = JSON.parse(rawResult);
+      const result = this.transformOpenRouterResponse(parsedResult);
 
       console.log('✅ Translation completed for:', request.text);
-
-      // LangDB now returns structured JSON directly (transformed in adapter)
-      const result = langdbResult as TranslationResponse;
 
       // Cache the result
       this.cache.set(cacheKey, { data: result, timestamp: Date.now() });
@@ -163,71 +158,34 @@ export class TranslationService {
       this.metrics.successes.inc();
 
       return result;
-    } catch (langdbError: any) {
-      console.error('❌ LangDB failed for', request.text, ':', langdbError.message);
-      console.error('LangDB error details:', {
-        error: langdbError.message,
-        cause: langdbError.cause,
-        stack: langdbError.stack,
+    } catch (error: any) {
+      console.error('❌ OpenRouter failed for', request.text, ':', error.message);
+      console.error('OpenRouter error details:', {
+        error: error.message,
+        cause: error.cause,
+        stack: error.stack,
         request: request
       });
       // Metrics: Increment error counter
       this.metrics.errors.inc();
 
-      // Detect LangDB 504 errors and skip to OpenRouter immediately
-      if (langdbError.message.includes('504') || langdbError.message.includes('Gateway Timeout')) {
-        console.log('🚫 LangDB 504 detected, skipping to OpenRouter fallback immediately');
-        // Jump directly to OpenRouter fallback without LangDBAdapter fallback
-      }
-
-      // Early fallback to OpenRouter after first LangDB failure to avoid multiple "fetch failed" errors
-      try {
-        console.log('🔄 LangDB failed, implementing early fallback to OpenRouter for', request.text);
-        const openRouterAdapter = new OpenRouterAdapter(process.env.OPENROUTER_API_KEY || '', process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1');
-        const systemPrompt = `You are a precise Spanish-English translator. Output ONLY JSON: {
-"definitions": [{"meaning": "string", "pos": "noun|verb|adj|adv", "usage": "formal|informal|slang"}],
-"examples": [{"es": "Spanish example", "en": "English example", "context": "usage context"}],
-"conjugations": {"present": ["yo form", "tú form", ...], "past": [...]},
-"audio": {"ipa": "phonetic", "suggestions": ["audio suggestions"]},
-"related": {"synonyms": ["syn1"], "antonyms": ["ant1"]}
-}. Use regional variants if context provided.`;
-
-        const userPrompt = `Translate "${request.text}" from ${request.sourceLang} to ${request.targetLang}${regionalContext ? ` with ${regionalContext} context` : ''}.`;
-        const messages: LLMMessage[] = [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ];
-        const options: LLMOptions = {
-          model: 'gpt-4o-mini', // Use compatible model
-          timeout: 30000,
-          requestId: `fallback_${Date.now()}`
-        };
-        const rawResult = await openRouterAdapter.fetchCompletion(messages, options);
-        const fallbackResult = JSON.parse(rawResult);
-        console.log('✅ OpenRouter early fallback success for:', request.text);
-        // Cache fallback result
-        this.cache.set(cacheKey, { data: this.transformLangDBResponse(fallbackResult), timestamp: Date.now() });
-        return this.transformLangDBResponse(fallbackResult);
-      } catch (fallbackError: any) {
-        console.error('❌ OpenRouter early fallback also failed for', request.text, ':', fallbackError.message);
-        // Final fallback JSON
-        const finalFallback = {
-          definitions: [
-            {
-              text: `Error: "${request.text}" (both services unavailable)`,
-              meaning: `Error: "${request.text}" (both services unavailable)`,
-              pos: 'unknown',
-              usage: 'error'
-            }
-          ],
-          examples: [],
-          conjugations: {},
-          audio: { ipa: '', suggestions: [] },
-          related: { synonyms: [], antonyms: [] }
-        };
-        console.log('🔄 TranslationService returning final fallback for', request.text);
-        return finalFallback;
-      }
+      // Final fallback JSON
+      const finalFallback = {
+        definitions: [
+          {
+            text: `Error: "${request.text}" (service unavailable)`,
+            meaning: `Error: "${request.text}" (service unavailable)`,
+            pos: 'unknown',
+            usage: 'error'
+          }
+        ],
+        examples: [],
+        conjugations: {},
+        audio: { ipa: '', suggestions: [] },
+        related: { synonyms: [], antonyms: [] }
+      };
+      console.log('🔄 TranslationService returning final fallback for', request.text);
+      return finalFallback;
     }
   }
 
@@ -253,19 +211,6 @@ export class TranslationService {
       requests: this.metrics.requests.count,
       successes: this.metrics.successes.count,
       errors: this.metrics.errors.count
-    };
-  }
-
-  // Get service health monitoring
-  getServiceHealth(): { langdb: boolean; openrouter: boolean; overall: boolean } {
-    // Quick health check - could ping endpoints or check circuit breaker state
-    const langdbHealthy = this.langdbAdapter.getCircuitBreakerState() !== 'open';
-    const openrouterHealthy = true; // Assume healthy unless proven otherwise
-
-    return {
-      langdb: langdbHealthy,
-      openrouter: openrouterHealthy,
-      overall: langdbHealthy || openrouterHealthy
     };
   }
 
@@ -302,11 +247,13 @@ export class TranslationService {
   }
 }
 
-// Singleton instance
-export const translationService = new TranslationService(new LangDBAdapter(
-  process.env.LANGDB_API_KEY || '',
-  process.env.LANGDB_GATEWAY_URL || 'https://api.us-east-1.langdb.ai/v1'
-));
+// Singleton instance - now using OpenRouter exclusively
+export const translationService = new TranslationService(
+  new OpenRouterAdapter(
+    process.env.OPENROUTER_API_KEY || '',
+    process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
+  )
+);
 
 // Periodic cache cleanup
 setInterval(() => {
