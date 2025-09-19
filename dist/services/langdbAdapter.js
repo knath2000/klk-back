@@ -508,7 +508,7 @@ CRITICAL: Output ONLY JSON. Include regional variations if context provided. Con
             { role: 'user', content: userPrompt }
         ];
         const options = {
-            model: 'gpt-4o-mini', // Use gpt-4o-mini for better streaming reliability
+            model: 'openai/gpt-5-mini', // Keep gpt-5-mini for translation as it works for chat
             timeout: 120000, // Increased to 120s for structured output
             requestId: `translate_${Date.now()}`
         };
