@@ -43,6 +43,8 @@ export interface UserMessagePayload {
   selected_country_key: string;
   client_ts: number;
   message_id: string;
+  model?: string; // Selected model for this message
+  conversationId?: string; // Conversation context for model switching
 }
 
 export interface AssistantDeltaPayload {

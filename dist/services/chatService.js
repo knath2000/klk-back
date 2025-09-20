@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ChatService = void 0;
 const personaService_1 = require("./personaService");
+const conversationService_1 = require("./conversationService");
 class ChatService {
     constructor(llmAdapter) {
         this.activeStreams = new Map();
@@ -81,7 +82,7 @@ class ChatService {
         console.log(`📊 [${timestamp}] RESPONSE-${stage.toUpperCase()}: ${messageId}`, data);
     }
     async handleUserMessage(socket, payload) {
-        const { message, selected_country_key, client_ts, message_id } = payload;
+        const { message, selected_country_key, client_ts, message_id, model, conversationId } = payload;
         console.log(`🤖 PROCESSING MESSAGE: ${message_id} - "${message}" for country: ${selected_country_key}`);
         this.logResponseProcess(message_id, 'start', { userMessage: message, country: selected_country_key });
         try {
@@ -108,6 +109,19 @@ class ChatService {
             }
             console.log(`✅ USING PERSONA: ${persona.displayName} (${persona.country_key})`);
             this.logResponseProcess(message_id, 'persona_selected', { persona: persona.displayName });
+            // Determine model to use - from payload, DB, or default
+            let effectiveModel = model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+            if (conversationId) {
+                try {
+                    effectiveModel = await conversationService_1.conversationService.getCurrentModel(conversationId);
+                    console.log(`📋 LOADED CONVERSATION MODEL from DB: ${effectiveModel} for conversation: ${conversationId}`);
+                }
+                catch (dbError) {
+                    const errorMessage = dbError instanceof Error ? dbError.message : 'Unknown database error';
+                    console.warn(`⚠️ FAILED TO LOAD CONVERSATION MODEL from DB, using payload/default: ${errorMessage}`);
+                    effectiveModel = model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+                }
+            }
             // Start typing indicator
             const typingPayload = {
                 country_key: selected_country_key,
@@ -124,11 +138,11 @@ class ChatService {
                 content: message
             };
             const messages = [systemMessage, userMessage];
-            console.log(`🚀 CALLING LLM: ${messages.length} messages`);
-            this.logResponseProcess(message_id, 'llm_call', { messageCount: messages.length });
+            console.log(`🚀 CALLING LLM: ${messages.length} messages with model: ${effectiveModel}`);
+            this.logResponseProcess(message_id, 'llm_call', { messageCount: messages.length, model: effectiveModel });
             // Stream LLM response
             const options = {
-                model: process.env.LANGDB_MODEL || 'gemini-2.5-flash-lite',
+                model: effectiveModel,
                 timeout: parseInt(process.env.REQUEST_TIMEOUT || '30000'), // 30 second default
                 requestId: message_id
             };

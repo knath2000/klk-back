@@ -222,6 +222,48 @@ export class ConversationService {
   }
 
   /**
+   * Get current model for conversation (latest from model history or conversation model field)
+   */
+  async getCurrentModel(conversationId: string): Promise<string> {
+    const supabase = getSupabase();
+    
+    // First, try to get the latest model switch from history
+    const { data: modelHistory, error: historyError } = await supabase
+      .from('conversation_models')
+      .select('model_id')
+      .eq('conversation_id', conversationId)
+      .order('switched_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (historyError && historyError.code !== 'PGRST116') { // PGRST116 is "no rows returned"
+      throw new Error(`Failed to fetch model history: ${historyError.message}`);
+    }
+
+    if (modelHistory) {
+      return modelHistory.model_id;
+    }
+
+    // Fallback to conversation's model field
+    const { data: conversation, error: convError } = await supabase
+      .from('conversations')
+      .select('model')
+      .eq('id', conversationId)
+      .single();
+
+    if (convError) {
+      throw new Error(`Failed to fetch conversation model: ${convError.message}`);
+    }
+
+    if (conversation && conversation.model) {
+      return conversation.model;
+    }
+
+    // Final fallback to default
+    return process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+  }
+
+  /**
    * Get conversation model history
    */
   async getConversationModelHistory(conversationId: string): Promise<ConversationModel[]> {

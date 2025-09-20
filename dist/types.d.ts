@@ -36,6 +36,8 @@ export interface UserMessagePayload {
     selected_country_key: string;
     client_ts: number;
     message_id: string;
+    model?: string;
+    conversationId?: string;
 }
 export interface AssistantDeltaPayload {
     message_id: string;

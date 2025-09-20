@@ -45,6 +45,10 @@ export declare class ConversationService {
      */
     switchModel(conversationId: string, modelId: string, reason?: string): Promise<ConversationModel>;
     /**
+     * Get current model for conversation (latest from model history or conversation model field)
+     */
+    getCurrentModel(conversationId: string): Promise<string>;
+    /**
      * Get conversation model history
      */
     getConversationModelHistory(conversationId: string): Promise<ConversationModel[]>;
