@@ -13,6 +13,11 @@ import {
 import { Server, Socket } from 'socket.io';
 import { conversationService } from './conversationService';
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
+
 export class ChatService {
   private llmAdapter: ILLMAdapter;
   private activeStreams: Map<string, AbortController> = new Map();
@@ -146,8 +151,8 @@ export class ChatService {
         try {
           effectiveModel = await conversationService.getCurrentModel(conversationId);
           console.log(`📋 LOADED CONVERSATION MODEL from DB: ${effectiveModel} for conversation: ${conversationId}`);
-        } catch (dbError: unknown) {
-          const errorMessage = dbError instanceof Error ? dbError.message : 'Unknown database error';
+        } catch (dbError) {
+          const errorMessage = getErrorMessage(dbError);
           console.warn(`⚠️ FAILED TO LOAD CONVERSATION MODEL from DB, using payload/default: ${errorMessage}`);
           effectiveModel = model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
         }
@@ -313,7 +318,7 @@ export class ChatService {
         console.error(`❌ LLM STREAMING ERROR for ${message_id}:`, error);
         this.logResponseProcess(message_id, 'error', { 
           type: 'streaming_error', 
-          error: error instanceof Error ? error.message : 'Unknown error' 
+          error: getErrorMessage(error) 
         });
 
         // Stop typing indicator
@@ -344,7 +349,7 @@ export class ChatService {
       console.error(`❌ CHAT SERVICE ERROR for ${message_id}:`, error);
       this.logResponseProcess(message_id, 'error', { 
         type: 'service_error', 
-        error: error instanceof Error ? error.message : 'Unknown error' 
+        error: getErrorMessage(error) 
       });
       
       // Stop typing indicator if it's still running

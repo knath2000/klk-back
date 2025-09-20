@@ -3,6 +3,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ChatService = void 0;
 const personaService_1 = require("./personaService");
 const conversationService_1 = require("./conversationService");
+const getErrorMessage = (error) => {
+    if (error instanceof Error)
+        return error.message;
+    return String(error);
+};
 class ChatService {
     constructor(llmAdapter) {
         this.activeStreams = new Map();
@@ -117,7 +122,7 @@ class ChatService {
                     console.log(`📋 LOADED CONVERSATION MODEL from DB: ${effectiveModel} for conversation: ${conversationId}`);
                 }
                 catch (dbError) {
-                    const errorMessage = dbError instanceof Error ? dbError.message : 'Unknown database error';
+                    const errorMessage = getErrorMessage(dbError);
                     console.warn(`⚠️ FAILED TO LOAD CONVERSATION MODEL from DB, using payload/default: ${errorMessage}`);
                     effectiveModel = model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
                 }
@@ -259,7 +264,7 @@ class ChatService {
                 console.error(`❌ LLM STREAMING ERROR for ${message_id}:`, error);
                 this.logResponseProcess(message_id, 'error', {
                     type: 'streaming_error',
-                    error: error instanceof Error ? error.message : 'Unknown error'
+                    error: getErrorMessage(error)
                 });
                 // Stop typing indicator
                 socket.emit('typing_end', typingPayload);
@@ -286,7 +291,7 @@ class ChatService {
             console.error(`❌ CHAT SERVICE ERROR for ${message_id}:`, error);
             this.logResponseProcess(message_id, 'error', {
                 type: 'service_error',
-                error: error instanceof Error ? error.message : 'Unknown error'
+                error: getErrorMessage(error)
             });
             // Stop typing indicator if it's still running
             const typingPayload = {
