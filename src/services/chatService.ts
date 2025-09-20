@@ -146,7 +146,7 @@ export class ChatService {
         try {
           effectiveModel = await conversationService.getCurrentModel(conversationId);
           console.log(`📋 LOADED CONVERSATION MODEL from DB: ${effectiveModel} for conversation: ${conversationId}`);
-        } catch (dbError) {
+        } catch (dbError: unknown) {
           const errorMessage = dbError instanceof Error ? dbError.message : 'Unknown database error';
           console.warn(`⚠️ FAILED TO LOAD CONVERSATION MODEL from DB, using payload/default: ${errorMessage}`);
           effectiveModel = model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
