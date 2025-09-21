@@ -2,14 +2,17 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Copy all package files
+# Copy package files
 COPY package*.json ./
 
-# Install dependencies (including devDependencies for TypeScript build)
+# Install dependencies
 RUN npm ci
 
-# Copy source code - Copy current directory contents
+# Copy all source code (including prisma schema)
 COPY . .
+
+# Generate Prisma client
+RUN npx prisma generate
 
 # Build TypeScript
 RUN npm run build
