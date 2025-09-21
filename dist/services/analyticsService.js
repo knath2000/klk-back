@@ -164,7 +164,7 @@ class AnalyticsService {
         if (membersError) {
             throw new Error(`Failed to fetch team members: ${membersError.message}`);
         }
-        const userIds = members.map(m => m.user_id);
+        const userIds = members.map((m) => m.user_id);
         // Get team conversations
         const { data: conversations, error: convError } = await supabase
             .from('conversations')
@@ -219,7 +219,7 @@ class AnalyticsService {
             modelUsage[conv.model] = (modelUsage[conv.model] || 0) + 1;
         }
         // Get conversation analytics
-        const analyticsPromises = topConversations.map(conv => this.getConversationAnalytics(conv.id));
+        const analyticsPromises = topConversations.map((conv) => this.getConversationAnalytics(conv.id));
         const analytics = await Promise.all(analyticsPromises);
         return {
             topConversations: topConversations.map((conv, index) => ({
@@ -257,7 +257,7 @@ class AnalyticsService {
             throw new Error(`Failed to fetch team members: ${membersError.message}`);
         }
         // Get conversation analytics for team conversations
-        const analyticsPromises = conversations.map(conv => this.getConversationAnalytics(conv.id));
+        const analyticsPromises = conversations.map((conv) => this.getConversationAnalytics(conv.id));
         const analytics = await Promise.all(analyticsPromises);
         return {
             teamConversations: conversations.map((conv, index) => ({
@@ -303,7 +303,7 @@ class AnalyticsService {
                 updated_at: conversation.updated_at,
                 message_count: conversation.message_count
             },
-            messages: messages.map(msg => ({
+            messages: messages.map((msg) => ({
                 id: msg.id,
                 role: msg.role,
                 content: msg.content,
@@ -320,14 +320,14 @@ class AnalyticsService {
         else if (format === 'csv') {
             // Convert to CSV format
             const csvHeaders = ['Role', 'Content', 'Model', 'Created At', 'Tokens Used'];
-            const csvRows = messages.map(msg => [
+            const csvRows = messages.map((msg) => [
                 msg.role,
                 `"${msg.content.replace(/"/g, '""')}"`,
                 msg.model,
                 msg.created_at,
                 msg.tokens_used || ''
             ]);
-            const csvContent = [csvHeaders.join(','), ...csvRows.map(row => row.join(','))].join('\n');
+            const csvContent = [csvHeaders.join(','), ...csvRows.map((row) => row.join(','))].join('\n');
             return csvContent;
         }
         else if (format === 'pdf') {
@@ -381,21 +381,25 @@ class AnalyticsService {
         const totalTokens = usageLogs.reduce((sum, log) => sum + log.tokens_used, 0);
         // Model usage breakdown
         const modelUsage = {};
-        conversations.forEach(conv => {
-            if (!modelUsage[conv.model]) {
-                modelUsage[conv.model] = { count: 0, tokens: 0 };
+        conversations.forEach((conv) => {
+            if (conv.model) {
+                if (!modelUsage[conv.model]) {
+                    modelUsage[conv.model] = { count: 0, tokens: 0 };
+                }
+                modelUsage[conv.model].count += 1;
             }
-            modelUsage[conv.model].count += 1;
         });
         // Daily usage trends
         const dailyUsage = {};
-        conversations.forEach(conv => {
-            const date = conv.created_at.split('T')[0];
-            if (!dailyUsage[date]) {
-                dailyUsage[date] = { conversations: 0, messages: 0, tokens: 0 };
+        conversations.forEach((conv) => {
+            const date = (conv.created_at || '').split('T')[0];
+            if (date) {
+                if (!dailyUsage[date]) {
+                    dailyUsage[date] = { conversations: 0, messages: 0, tokens: 0 };
+                }
+                dailyUsage[date].conversations += 1;
+                dailyUsage[date].messages += conv.message_count;
             }
-            dailyUsage[date].conversations += 1;
-            dailyUsage[date].messages += conv.message_count;
         });
         // Top conversations by message count
         const topConversations = [...conversations]
@@ -410,7 +414,7 @@ class AnalyticsService {
             },
             modelUsage,
             dailyUsage,
-            topConversations: topConversations.map(conv => ({
+            topConversations: topConversations.map((conv, index) => ({
                 id: conv.id,
                 title: conv.title,
                 message_count: conv.message_count,
@@ -459,9 +463,9 @@ class AnalyticsService {
         const totalMessages = conversations.reduce((sum, conv) => sum + conv.message_count, 0);
         // Member activity
         const memberActivity = {};
-        const userIds = members.map(m => m.user_id);
+        const userIds = members.map((m) => m.user_id);
         for (const userId of userIds) {
-            const userConversations = conversations.filter(conv => conv.user_id === userId);
+            const userConversations = conversations.filter((conv) => conv.user_id === userId);
             memberActivity[userId] = {
                 conversations: userConversations.length,
                 messages: userConversations.reduce((sum, conv) => sum + conv.message_count, 0)
@@ -487,7 +491,7 @@ class AnalyticsService {
             memberActivity,
             topMembers,
             recentConversations: conversations
-                .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+                .sort((a, b) => new Date(b.updated_at || '1970-01-01T00:00:00Z').getTime() - new Date(a.updated_at || '1970-01-01T00:00:00Z').getTime())
                 .slice(0, 10)
         };
     }

@@ -144,7 +144,7 @@ class CollaborationService {
         // Combine owner and shared users
         const participants = [
             { user_id: conversation.user_id, permission: 'owner' },
-            ...sharedUsers.map(user => ({
+            ...sharedUsers.map((user) => ({
                 user_id: user.shared_with_id,
                 permission: user.permission
             }))
@@ -168,7 +168,7 @@ class CollaborationService {
             throw new Error(`Failed to fetch shared conversations: ${sharedError.message}`);
         }
         // Get recent messages from shared conversations
-        const conversationIds = sharedConversations.map(sc => sc.conversation_id);
+        const conversationIds = sharedConversations.map((sc) => sc.conversation_id);
         if (conversationIds.length === 0)
             return [];
         const { data: messages, error: messagesError } = await supabase

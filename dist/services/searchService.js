@@ -55,13 +55,13 @@ class SearchService {
         }
         // Get conversation titles for context
         if (messages.length > 0) {
-            const conversationIds = [...new Set(messages.map(m => m.conversation_id))];
+            const conversationIds = [...new Set(messages.map((m) => m.conversation_id))];
             const { data: conversations } = await supabase
                 .from('conversations')
                 .select('id, title')
                 .in('id', conversationIds);
-            const conversationMap = new Map(conversations?.map(c => [c.id, c.title]) || []);
-            return messages.map(message => ({
+            const conversationMap = new Map(conversations?.map((c) => [c.id, c.title]) || []);
+            return messages.map((message) => ({
                 ...message,
                 conversation_title: conversationMap.get(message.conversation_id) || 'Untitled Conversation'
             }));
@@ -108,7 +108,7 @@ class SearchService {
             .ilike('title', `%${query}%`)
             .order('updated_at', { ascending: false })
             .limit(5);
-        const titles = conversations?.map(c => c.title) || [];
+        const titles = conversations?.map((c) => c.title) || [];
         // Add common search terms based on user's conversation history
         const commonTerms = ['chat', 'discussion', 'meeting', 'project', 'idea', 'question'];
         const suggestions = [...new Set([...titles, ...commonTerms])];

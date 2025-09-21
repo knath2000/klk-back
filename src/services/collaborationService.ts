@@ -3,6 +3,12 @@ import { SharedConversation } from '../models/team';
 import { conversationService } from './conversationService';
 import { ConversationMessage } from '../models/conversation';
 
+// Add interfaces after imports
+interface SharedUser {
+  shared_with_id: string;
+  permission: string;
+}
+
 export class CollaborationService {
   /**
    * Share conversation with user
@@ -169,7 +175,7 @@ export class CollaborationService {
     // Combine owner and shared users
     const participants = [
       { user_id: conversation.user_id, permission: 'owner' },
-      ...sharedUsers.map(user => ({ 
+      ...sharedUsers.map((user: SharedUser) => ({ 
         user_id: user.shared_with_id, 
         permission: user.permission 
       }))
@@ -198,7 +204,7 @@ export class CollaborationService {
     }
 
     // Get recent messages from shared conversations
-    const conversationIds = sharedConversations.map(sc => sc.conversation_id);
+    const conversationIds = sharedConversations.map((sc: SharedConversation) => sc.conversation_id);
     if (conversationIds.length === 0) return [];
 
     const { data: messages, error: messagesError } = await supabase

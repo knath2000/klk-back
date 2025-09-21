@@ -1,15 +1,6 @@
 import { Session, User } from "next-auth";
 export declare const authConfig: {
-    providers: import("next-auth/providers/credentials").CredentialsConfig<{
-        email: {
-            label: string;
-            type: string;
-        };
-        password: {
-            label: string;
-            type: string;
-        };
-    }>[];
+    providers: any[];
     callbacks: {
         authorized({ auth, request: { nextUrl } }: {
             auth: any;

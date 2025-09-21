@@ -17,5 +17,11 @@ export declare class SearchService {
      */
     getSuggestions(userId: string, query: string): Promise<string[]>;
 }
+export interface ConversationMessage {
+    id: string;
+    conversation_id: string;
+    content: string;
+    created_at: string;
+}
 export declare const searchService: SearchService;
 //# sourceMappingURL=searchService.d.ts.map
