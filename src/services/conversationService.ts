@@ -1,5 +1,9 @@
 import { getSupabase } from './db';
 import { Conversation, ConversationMessage, ConversationModel } from '../models/conversation';
+import { PrismaClient } from '@prisma/client';
+
+// Initialize Prisma
+const prisma = new PrismaClient();
 
 export class ConversationService {
   /**

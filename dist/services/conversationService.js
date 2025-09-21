@@ -2,6 +2,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.conversationService = exports.ConversationService = void 0;
 const db_1 = require("./db");
+const client_1 = require("@prisma/client");
+// Initialize Prisma
+const prisma = new client_1.PrismaClient();
 class ConversationService {
     /**
      * Create a new conversation
