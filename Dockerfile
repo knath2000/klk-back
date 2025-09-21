@@ -2,20 +2,26 @@ FROM node:18-alpine
 
 WORKDIR /app
 
+# Install pnpm globally
+RUN npm install -g pnpm
+
 # Copy package files
-COPY package*.json ./
+COPY package*.json pnpm-lock.yaml ./
 
-# Install dependencies
-RUN npm ci
+# Install dependencies with pnpm
+RUN pnpm ci
 
-# Copy all source code (including prisma schema)
-COPY . .
+# Copy Prisma schema for client generation
+COPY prisma ./prisma
 
 # Generate Prisma client
-RUN npx prisma generate
+RUN pnpm exec prisma generate
+
+# Copy the rest of the source code
+COPY . .
 
 # Build TypeScript
-RUN npm run build
+RUN pnpm run build
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs
