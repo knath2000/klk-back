@@ -2,16 +2,19 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Copy package files for npm install
+# Install required system libs for Prisma on Alpine
+RUN apk add --no-cache openssl libc6-compat
+
+# Copy package files for reproducible install
 COPY package.json package-lock.json ./
 
-# Install dependencies with npm ci for reproducibility
-RUN npm ci
-
-# Copy Prisma schema
+# COPY Prisma schema BEFORE npm ci so postinstall "prisma generate" can find it
 COPY prisma ./prisma
 
-# Generate Prisma client
+# Install dependencies; postinstall will run prisma generate now that schema exists
+RUN npm ci
+
+# (Optional but safe) Re-run prisma generate explicitly (idempotent)
 RUN npx prisma generate
 
 # Copy source code and config
