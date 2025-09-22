@@ -282,18 +282,29 @@ class WebSocketService {
             { role: 'user', content: data.message }
           ];
           
-          // Determine effective model: conversation -> payload -> default
-          let effectiveModel = data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
-          if (data.conversationId) {
+          // Determine effective model with strict precedence:
+          // 1) Payload model from client (explicit user selection)
+          // 2) Per-conversation model from DB (if conversationId and DB available)
+          // 3) Default env model
+          let effectiveModel: string | undefined;
+          if (data.model) {
+            effectiveModel = data.model;
+            console.log(`🧠 Using payload-selected model for request ${data.message_id}: ${effectiveModel}`);
+          } else if (data.conversationId) {
             try {
-              effectiveModel = await conversationService.getCurrentModel(data.conversationId);
-              console.log(`📋 LOADED CONVERSATION MODEL from DB: ${effectiveModel} for conversation: ${data.conversationId}`);
+              const dbModel = await conversationService.getCurrentModel(data.conversationId);
+              if (dbModel) {
+                effectiveModel = dbModel;
+                console.log(`📋 LOADED CONVERSATION MODEL from DB for ${data.conversationId}: ${effectiveModel}`);
+              }
             } catch (dbError: any) {
-              console.warn(`⚠️ FAILED TO LOAD CONVERSATION MODEL from DB, using payload/default: ${dbError?.message || dbError}`);
-              effectiveModel = data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+              console.warn(`⚠️ FAILED TO LOAD CONVERSATION MODEL from DB, will use default: ${dbError?.message || dbError}`);
             }
           }
-          console.log(`🧠 Using model for request ${data.message_id}: ${effectiveModel}`);
+          if (!effectiveModel) {
+            effectiveModel = process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+            console.log(`🔁 Fallback to default model for request ${data.message_id}: ${effectiveModel}`);
+          }
 
           // Use OpenRouter for chat
           const openRouterAdapter = new OpenRouterAdapter(
