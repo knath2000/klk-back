@@ -187,7 +187,7 @@ export class AnalyticsService {
 
     // Get message count
     const totalConversations = conversations.length;
-    const totalMessages = conversations.reduce((sum: number, conv: ConversationSummary) => sum + conv.message_count, 0);
+    const totalMessages = conversations.reduce((sum: number, conv: ConversationSummary) => sum + (conv as any).message_count, 0);
 
     // Get token usage
     const { data: usage, error: usageError } = await supabase
@@ -200,7 +200,7 @@ export class AnalyticsService {
       throw new Error(`Failed to fetch usage stats: ${usageError.message}`);
     }
 
-    const totalTokens = usage ? usage.reduce((sum: number, log: UsageLog) => sum + log.tokens_used, 0) : 0;
+    const totalTokens = usage ? (usage as any[]).reduce((sum: number, log: UsageLog) => sum + log.tokens_used, 0) : 0;
 
     return {
       totalConversations,
@@ -240,7 +240,7 @@ export class AnalyticsService {
     }
 
     const totalConversations = conversations.length;
-    const totalMessages = conversations.reduce((sum: number, conv: ConversationSummary) => sum + conv.message_count, 0);
+    const totalMessages = conversations.reduce((sum: number, conv: ConversationSummary) => sum + (conv as any).message_count, 0);
 
     // Get token usage for team members
     let totalTokens = 0;
@@ -251,7 +251,7 @@ export class AnalyticsService {
         .eq('user_id', userId);
       
       if (usage) {
-        totalTokens += usage.reduce((sum: number, log: UsageLog) => sum + log.tokens_used, 0);
+        totalTokens += (usage as any[]).reduce((sum: number, log: UsageLog) => sum + log.tokens_used, 0);
       }
     }
 
@@ -394,19 +394,19 @@ export class AnalyticsService {
     const exportData = {
       conversation: {
         id: conversation.id,
-        title: conversation.title,
-        model: conversation.model,
-        created_at: conversation.created_at,
-        updated_at: conversation.updated_at,
-        message_count: conversation.message_count
+        title: (conversation as any).title,
+        model: (conversation as any).model,
+        created_at: (conversation as any).created_at,
+        updated_at: (conversation as any).updated_at,
+        message_count: (conversation as any).message_count
       },
       messages: messages.map((msg: MessageSummary) => ({
         id: msg.id,
         role: msg.role,
         content: msg.content,
         model: msg.model,
-        created_at: msg.created_at,
-        tokens_used: msg.tokens_used
+        created_at: (msg as any).created_at,
+        tokens_used: (msg as any).tokens_used
       })),
       analytics,
       exported_at: new Date().toISOString()
@@ -418,11 +418,11 @@ export class AnalyticsService {
       // Convert to CSV format
       const csvHeaders = ['Role', 'Content', 'Model', 'Created At', 'Tokens Used'];
       const csvRows = messages.map((msg: MessageSummary) => [
-        msg.role,
-        `"${msg.content.replace(/"/g, '""')}"`,
-        msg.model,
-        msg.created_at,
-        msg.tokens_used || ''
+        String(msg.role),
+        `"${String(msg.content).replace(/"/g, '""')}"`,
+        String(msg.model ?? ''),
+        String(msg.created_at ?? ''),
+        String(msg.tokens_used ?? '')
       ]);
       
       const csvContent = [csvHeaders.join(','), ...csvRows.map((row: string[]) => row.join(','))].join('\n');
@@ -486,8 +486,8 @@ export class AnalyticsService {
 
     // Calculate metrics
     const totalConversations = conversations.length;
-    const totalMessages = conversations.reduce((sum: number, conv: ConversationSummary) => sum + conv.message_count, 0);
-    const totalTokens = usageLogs.reduce((sum: number, log: UsageLog) => sum + log.tokens_used, 0);
+    const totalMessages = conversations.reduce((sum: number, conv: ConversationSummary) => sum + (conv as any).message_count, 0);
+    const totalTokens = (usageLogs as any[]).reduce((sum: number, log: UsageLog) => sum + log.tokens_used, 0);
     
     // Model usage breakdown
     const modelUsage: Record<string, { count: number, tokens: number }> = {};
@@ -503,13 +503,13 @@ export class AnalyticsService {
     // Daily usage trends
     const dailyUsage: Record<string, { conversations: number, messages: number, tokens: number }> = {};
     conversations.forEach((conv: ConversationSummary) => {
-      const date = (conv.created_at || '').split('T')[0];
+      const date = (conv as any).created_at.split('T')[0];
       if (date) {
         if (!dailyUsage[date]) {
           dailyUsage[date] = { conversations: 0, messages: 0, tokens: 0 };
         }
         dailyUsage[date].conversations += 1;
-        dailyUsage[date].messages += conv.message_count;
+        dailyUsage[date].messages += (conv as any).message_count;
       }
     });
 
@@ -581,7 +581,7 @@ export class AnalyticsService {
 
     // Calculate team metrics
     const totalConversations = conversations.length;
-    const totalMessages = conversations.reduce((sum: number, conv: ConversationSummary) => sum + conv.message_count, 0);
+    const totalMessages = conversations.reduce((sum: number, conv: ConversationSummary) => sum + (conv as any).message_count, 0);
     
     // Member activity
     const memberActivity: Record<string, { conversations: number, messages: number }> = {};
@@ -591,7 +591,7 @@ export class AnalyticsService {
       const userConversations = (conversations as any[]).filter((conv: ConversationSummary) => conv.user_id === userId);
       memberActivity[userId] = {
         conversations: userConversations.length,
-        messages: userConversations.reduce((sum: number, conv: ConversationSummary) => sum + conv.message_count, 0)
+        messages: userConversations.reduce((sum: number, conv: ConversationSummary) => sum + (conv as any).message_count, 0)
       };
     }
 
@@ -616,7 +616,7 @@ export class AnalyticsService {
       memberActivity,
       topMembers,
       recentConversations: (conversations as any[])
-        .sort((a: ConversationSummary, b: ConversationSummary) => new Date(b.updated_at || '1970-01-01T00:00:00Z').getTime() - new Date(a.updated_at || '1970-01-01T00:00:00Z').getTime())
+        .sort((a: ConversationSummary, b: ConversationSummary) => new Date((b as any).updated_at || '1970-01-01T00:00:00Z').getTime() - new Date((a as any).updated_at || '1970-01-01T00:00:00Z').getTime())
         .slice(0, 10)
     };
   }

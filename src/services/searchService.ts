@@ -67,7 +67,11 @@ export class SearchService {
         .select('id, title')
         .in('id', conversationIds);
 
-      const conversationMap = new Map(conversations?.map((c: Conversation) => [c.id, c.title]) || []);
+      const conversationMap = new Map(
+        ((conversations as ConversationTitleRow[] | undefined) || []).map(
+          (c: ConversationTitleRow) => [c.id, c.title] as [string, string]
+        )
+      );
 
       return messages.map((message: ConversationMessage) => ({
         ...message,
@@ -124,7 +128,8 @@ export class SearchService {
       .order('updated_at', { ascending: false })
       .limit(5);
 
-    const titles = conversations?.map((c: Conversation) => c.title) || [];
+    type ConversationTitleOnly = { title: string };
+    const titles = ((conversations as ConversationTitleOnly[] | undefined) || []).map(c => String(c.title));
     
     // Add common search terms based on user's conversation history
     const commonTerms = ['chat', 'discussion', 'meeting', 'project', 'idea', 'question'];
@@ -139,6 +144,12 @@ export interface ConversationMessage {
   conversation_id: string;
   content: string;
   created_at: string;
+}
+
+// Narrow types for partial selects
+interface ConversationTitleRow {
+  id: string;
+  title: string;
 }
 
 // Export singleton instance

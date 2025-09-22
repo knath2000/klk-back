@@ -9,6 +9,13 @@ interface SharedUser {
   permission: string;
 }
 
+// Narrow row type for partial select in getUserCollaborativeActivity
+interface SharedConversationRow {
+  conversation_id: string;
+  shared_at: string | Date;
+  permission: string;
+}
+
 export class CollaborationService {
   /**
    * Share conversation with user
@@ -203,8 +210,11 @@ export class CollaborationService {
       throw new Error(`Failed to fetch shared conversations: ${sharedError.message}`);
     }
 
+    // Normalize row types to match selected columns
+    const sharedRows: SharedConversationRow[] = (sharedConversations as SharedConversationRow[] | null) || [];
+
     // Get recent messages from shared conversations
-    const conversationIds = sharedConversations.map((sc: SharedConversation) => sc.conversation_id);
+    const conversationIds = sharedRows.map((sc: SharedConversationRow) => sc.conversation_id);
     if (conversationIds.length === 0) return [];
 
     const { data: messages, error: messagesError } = await supabase
