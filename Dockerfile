@@ -11,6 +11,9 @@ COPY package.json package-lock.json ./
 # COPY Prisma schema BEFORE npm install so postinstall "prisma generate" can find it
 COPY prisma ./prisma
 
+# Copy personas for runtime access by PersonaService
+COPY personas ./personas
+
 # Install dependencies; postinstall will run prisma generate now that schema exists
 RUN npm install
 
