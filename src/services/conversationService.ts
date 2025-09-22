@@ -198,8 +198,7 @@ export class ConversationService {
    * Switch model for conversation
    */
   async switchModel(conversationId: string, modelId: string, reason: string = 'user_choice'): Promise<ConversationModel> {
-    const supabase = getSupabase();
-    
+    // Always construct a result we can return even if persistence is unavailable
     const modelSwitch: ConversationModel = {
       conversation_id: conversationId,
       model_id: modelId,
@@ -207,60 +206,78 @@ export class ConversationService {
       reason
     };
 
-    const { data, error } = await supabase
-      .from('conversation_models')
-      .insert([modelSwitch])
-      .select()
-      .single();
+    try {
+      const supabase = getSupabase();
 
-    if (error) {
-      throw new Error(`Failed to switch model: ${error.message}`);
+      const { data, error } = await supabase
+        .from('conversation_models')
+        .insert([modelSwitch])
+        .select()
+        .single();
+
+      if (error) {
+        throw new Error(`Failed to switch model: ${error.message}`);
+      }
+
+      // Update conversation's current model
+      await this.updateConversation(conversationId, {
+        model: modelId
+      });
+
+      return data;
+    } catch (e: any) {
+      // Graceful degradation: if Supabase is not configured or errors, skip persistence
+      console.warn(
+        '[conversationService.switchModel] Supabase unavailable; skipping persistence. Returning transient switch result.',
+        e?.message || e
+      );
+      return modelSwitch;
     }
-
-    // Update conversation's current model
-    await this.updateConversation(conversationId, {
-      model: modelId
-    });
-
-    return data;
   }
 
   /**
    * Get current model for conversation (latest from model history or conversation model field)
    */
   async getCurrentModel(conversationId: string): Promise<string> {
-    const supabase = getSupabase();
-    
-    // First, try to get the latest model switch from history
-    const { data: modelHistory, error: historyError } = await supabase
-      .from('conversation_models')
-      .select('model_id')
-      .eq('conversation_id', conversationId)
-      .order('switched_at', { ascending: false })
-      .limit(1)
-      .single();
+    try {
+      const supabase = getSupabase();
+      
+      // First, try to get the latest model switch from history
+      const { data: modelHistory, error: historyError } = await supabase
+        .from('conversation_models')
+        .select('model_id')
+        .eq('conversation_id', conversationId)
+        .order('switched_at', { ascending: false })
+        .limit(1)
+        .single();
 
-    if (historyError && historyError.code !== 'PGRST116') { // PGRST116 is "no rows returned"
-      throw new Error(`Failed to fetch model history: ${historyError.message}`);
-    }
+      if (historyError && historyError.code !== 'PGRST116') { // PGRST116 is "no rows returned"
+        throw new Error(`Failed to fetch model history: ${historyError.message}`);
+      }
 
-    if (modelHistory) {
-      return modelHistory.model_id;
-    }
+      if (modelHistory) {
+        return modelHistory.model_id;
+      }
 
-    // Fallback to conversation's model field
-    const { data: conversation, error: convError } = await supabase
-      .from('conversations')
-      .select('model')
-      .eq('id', conversationId)
-      .single();
+      // Fallback to conversation's model field
+      const { data: conversation, error: convError } = await supabase
+        .from('conversations')
+        .select('model')
+        .eq('id', conversationId)
+        .single();
 
-    if (convError) {
-      throw new Error(`Failed to fetch conversation model: ${convError.message}`);
-    }
+      if (convError) {
+        throw new Error(`Failed to fetch conversation model: ${convError.message}`);
+      }
 
-    if (conversation && conversation.model) {
-      return conversation.model;
+      if (conversation && conversation.model) {
+        return conversation.model;
+      }
+    } catch (e: any) {
+      console.warn(
+        '[conversationService.getCurrentModel] Supabase unavailable; using default model.',
+        e?.message || e
+      );
     }
 
     // Final fallback to default
