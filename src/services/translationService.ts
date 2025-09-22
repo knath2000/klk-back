@@ -40,6 +40,32 @@ export interface TranslationResponse {
     synonyms?: string[];
     antonyms?: string[];
   };
+  // New: full dictionary entry for richer UI (SpanishDict-style)
+  entry?: DictionaryEntry;
+}
+
+// New: SpanishDict-style dictionary entry schema
+interface DictionaryEntry {
+  headword: string;
+  pronunciation: {
+    ipa: string;
+    syllabification?: string;
+  };
+  part_of_speech: string; // e.g., "n", "v", "adj"
+  gender: 'm' | 'f' | 'mf' | null;
+  inflections: string[];
+  frequency?: number;
+  senses: Array<{
+    sense_number: number;
+    registers?: string[]; // ["slang","colloquial","pejorative","vulgar","figurative","technical","archaic"]
+    regions?: string[];   // ["Mexico","Caribbean","Venezuela","Guatemala","Latin America","Spain",...]
+    gloss: string;
+    usage_notes?: string;
+    examples: Array<{ es: string; en: string }>;
+    synonyms?: string[];
+    antonyms?: string[];
+    cross_references?: string[];
+  }>;
 }
 
 export class TranslationService {
@@ -60,7 +86,53 @@ export class TranslationService {
   }
 
   private transformOpenRouterResponse(openRouterResponse: any): TranslationResponse {
-    // OpenRouter returns structured JSON directly, light transformation for compatibility
+    // Accept either legacy structured JSON or the new DictionaryEntry JSON.
+    // If it's a DictionaryEntry (has headword + senses), map it to legacy fields and return with entry.
+    const isDictionaryEntry =
+      openRouterResponse &&
+      typeof openRouterResponse === 'object' &&
+      Array.isArray(openRouterResponse.senses) &&
+      typeof openRouterResponse.headword === 'string' &&
+      openRouterResponse.pronunciation;
+
+    if (isDictionaryEntry) {
+      const entry = openRouterResponse as DictionaryEntry;
+
+      // Ensure slang/colloquial/pejorative come first (defensive sort if model didn't order)
+      const priority = (regs?: string[]) => {
+        const set = new Set((regs || []).map((r) => r.toLowerCase()));
+        if (set.has('slang') || set.has('colloquial') || set.has('pejorative') || set.has('vulgar')) return 0;
+        // neutral/general next
+        if (!set.has('technical') && !set.has('archaic')) return 1;
+        // specialized last
+        return 2;
+      };
+      const sortedSenses = [...entry.senses].sort((a, b) => {
+        const pA = priority(a.registers);
+        const pB = priority(b.registers);
+        if (pA !== pB) return pA - pB;
+        // broader region before narrow if tied
+        const broad = (regions?: string[]) => (regions || []).some((r) => r.toLowerCase() === 'latin america') ? 0 : 1;
+        const rA = broad(a.regions);
+        const rB = broad(b.regions);
+        if (rA !== rB) return rA - rB;
+        // sense_number as final tie-breaker
+        return (a.sense_number || 0) - (b.sense_number || 0);
+      });
+
+      const legacy = this.mapEntryToLegacy({ ...entry, senses: sortedSenses });
+
+      return {
+        definitions: legacy.definitions,
+        examples: legacy.examples,
+        conjugations: legacy.conjugations,
+        audio: legacy.audio,
+        related: legacy.related,
+        entry: { ...entry, senses: sortedSenses }
+      };
+    }
+
+    // Legacy structure passthrough (backward-compat)
     return {
       definitions: openRouterResponse.definitions || [],
       examples: openRouterResponse.examples || [],
@@ -97,8 +169,11 @@ export class TranslationService {
       // Log before OpenRouter call
       console.log('📤 Calling OpenRouter for translation:', { text: request.text, sourceLang: request.sourceLang, targetLang: request.targetLang });
 
-      const systemPrompt = `You are a precise Spanish-English translator. Output ONLY valid JSON matching this exact structure without any additional text or explanations:
-
+      // Prefer translator persona prompt (SpanishDict-style JSON). Fall back to internal schema if persona not found.
+      const translatorPersona = await personaService.getPersona('translator').catch(() => null as any);
+      const systemPrompt =
+        (translatorPersona?.system_prompt as string) ||
+        `You are a precise Spanish-English translator. Output ONLY valid JSON matching this exact structure without any additional text or explanations:
 {
   "definitions": [
     {
@@ -130,17 +205,38 @@ export class TranslationService {
   }
 }
 
+Return ONLY JSON.
+
 Incorporate regional context if provided: ${regionalContext || 'general Spanish'}. Ensure all fields are populated appropriately for the word "${request.text}" from ${request.sourceLang} to ${request.targetLang}.`;
 
-      const userPrompt = `Provide detailed translation and linguistic breakdown for the word/phrase "${request.text}".`;
+      // Ask for dictionary entry for the headword with slang-first ordering; include regional hint.
+      const userPrompt = `Headword: ${request.text}
+Source language: ${request.sourceLang}
+Target language: ${request.targetLang}
+Regional preference: ${regionalContext || 'general Spanish'}
+Instructions:
+- Produce a single JSON object per the schema in the system prompt.
+- Ensure senses are ORDERED with slang/colloquial/pejorative/vulgar FIRST, then neutral/general, then technical/archaic/localized LAST.
+- Include at least one bilingual (es/en) example per sense.
+- Use compact labels for regions and registers.
+- Output ONLY valid JSON, no extra text.`;
 
       const messages: LLMMessage[] = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
       ];
 
+      // Model precedence for translation:
+      // 1) OPENROUTER_TRANSLATE_MODEL
+      // 2) OPENROUTER_MODEL
+      // 3) sensible free default
+      const effectiveModel =
+        process.env.OPENROUTER_TRANSLATE_MODEL ||
+        process.env.OPENROUTER_MODEL ||
+        'meta-llama/llama-3.3-8b-instruct:free';
+
       const options: LLMOptions = {
-        model: process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
+        model: effectiveModel,
         timeout: 30000,
         requestId: `translate_${Date.now()}`
       };
@@ -183,10 +279,64 @@ Incorporate regional context if provided: ${regionalContext || 'general Spanish'
         conjugations: {},
         audio: { ipa: '', suggestions: [] },
         related: { synonyms: [], antonyms: [] }
-      };
+      } as TranslationResponse;
       console.log('🔄 TranslationService returning final fallback for', request.text);
       return finalFallback;
     }
+  }
+
+  // Map DictionaryEntry -> legacy fields for backward compatibility with existing UI
+  private mapEntryToLegacy(entry: DictionaryEntry): TranslationResponse {
+    const pos = entry.part_of_speech || undefined;
+
+    const definitions = entry.senses.map((s) => {
+      const usageLabels = (s.registers || []).join(', ');
+      const examplesStrings = (s.examples || []).map((ex) => `${ex.es} — ${ex.en}`);
+      return {
+        text: s.gloss,
+        meaning: s.gloss,
+        partOfSpeech: pos,
+        pos,
+        usage: usageLabels || undefined,
+        examples: examplesStrings.length > 0 ? examplesStrings : undefined
+      };
+    });
+
+    const examples = entry.senses.flatMap((s) =>
+      (s.examples || []).map((ex) => ({
+        text: ex.es,
+        translation: ex.en,
+        spanish: ex.es,
+        english: ex.en,
+        context: s.usage_notes || (s.regions && s.regions.join(', ')) || undefined
+      }))
+    );
+
+    const audio = {
+      ipa: entry.pronunciation?.ipa || '',
+      suggestions: entry.pronunciation?.syllabification ? [entry.pronunciation.syllabification] : []
+    };
+
+    // Aggregate synonyms/antonyms across senses (unique)
+    const synSet = new Set<string>();
+    const antSet = new Set<string>();
+    entry.senses.forEach((s) => {
+      (s.synonyms || []).forEach((w) => synSet.add(w));
+      (s.antonyms || []).forEach((w) => antSet.add(w));
+    });
+
+    const related = {
+      synonyms: Array.from(synSet),
+      antonyms: Array.from(antSet)
+    };
+
+    return {
+      definitions,
+      examples,
+      conjugations: {}, // not applicable for nouns; verb entries can fill later
+      audio,
+      related
+    };
   }
 
   async getTranslationHistory(userId: string, limit: number = 50, offset: number = 0): Promise<Array<{ query: string; response: TranslationResponse; timestamp: Date }>> {

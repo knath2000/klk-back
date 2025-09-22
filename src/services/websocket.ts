@@ -184,6 +184,8 @@ class WebSocketService {
             conjugations: result.conjugations,
             audio: result.audio,
             related: result.related,
+            // New: include SpanishDict-style entry for richer UI
+            entry: (result as any).entry,
             timestamp: Date.now()
           };
 
@@ -197,8 +199,12 @@ class WebSocketService {
           // Stream response (delta for partial, final for complete)
           if (transport === 'websocket') {
             // Stream deltas if websocket (implement true streaming with chunks)
-            const firstDefinition = result.definitions[0]?.text || result.definitions[0]?.meaning || 'Translation completed';
-            const chunks = firstDefinition.split(' '); // Simple word-based streaming
+            const firstPreview =
+              (result.definitions?.[0]?.text) ||
+              (result.definitions?.[0]?.meaning) ||
+              ((result as any).entry?.senses?.[0]?.gloss) ||
+              'Translation completed';
+            const chunks = String(firstPreview).split(' '); // Simple word-based streaming
             chunks.forEach((chunk: string, index: number) => {
               setTimeout(() => {
                 socket.emit('translation_delta', { chunk, index, total: chunks.length, id: frontendResult.id });
