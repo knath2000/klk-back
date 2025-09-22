@@ -5,6 +5,7 @@ import { personaService } from './personaService';
 import { collaborationService } from './collaborationService';
 import { conversationService } from './conversationService';
 import { translationService } from './translationService';
+import type { UserMessagePayload } from '../types';
 
 interface WebSocketUser {
   userId: string;
@@ -225,12 +226,7 @@ class WebSocketService {
       });
 
       // New user_message handler for chat messages
-      socket.on('user_message', async (data: {
-        message: string;
-        selected_country_key: string;
-        client_ts: number;
-        message_id: string;
-      }) => {
+      socket.on('user_message', async (data: UserMessagePayload) => {
         // Update activity timestamp
         this.updateActivity(socket.id);
 
@@ -285,6 +281,19 @@ class WebSocketService {
             { role: 'system', content: persona.prompt_text },
             { role: 'user', content: data.message }
           ];
+          
+          // Determine effective model: conversation -> payload -> default
+          let effectiveModel = data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+          if (data.conversationId) {
+            try {
+              effectiveModel = await conversationService.getCurrentModel(data.conversationId);
+              console.log(`📋 LOADED CONVERSATION MODEL from DB: ${effectiveModel} for conversation: ${data.conversationId}`);
+            } catch (dbError: any) {
+              console.warn(`⚠️ FAILED TO LOAD CONVERSATION MODEL from DB, using payload/default: ${dbError?.message || dbError}`);
+              effectiveModel = data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+            }
+          }
+          console.log(`🧠 Using model for request ${data.message_id}: ${effectiveModel}`);
 
           // Use OpenRouter for chat
           const openRouterAdapter = new OpenRouterAdapter(
@@ -293,7 +302,7 @@ class WebSocketService {
           );
 
           const options: LLMOptions = {
-            model: process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
+            model: effectiveModel,
             timeout: 30000,
             requestId: data.message_id
           };
