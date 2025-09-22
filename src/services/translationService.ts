@@ -72,6 +72,8 @@ export class TranslationService {
   private openRouterAdapter: OpenRouterAdapter;
   private cache: Map<string, { data: TranslationResponse; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 1000 * 60 * 30; // 30 minutes
+  // New: version the schema/output format to safely bust stale cache entries
+  private readonly SCHEMA_VERSION = 'dict_v1';
   private metrics = {
     requests: { count: 0, inc: () => this.metrics.requests.count++ },
     successes: { count: 0, inc: () => this.metrics.successes.count++ },
@@ -170,9 +172,14 @@ export class TranslationService {
       console.log('📤 Calling OpenRouter for translation:', { text: request.text, sourceLang: request.sourceLang, targetLang: request.targetLang });
 
       // Prefer translator persona prompt (SpanishDict-style JSON). Fall back to internal schema if persona not found.
-      const translatorPersona = await personaService.getPersona('translator').catch(() => null as any);
+      let translatorPersona: any = null;
+      try {
+        translatorPersona = await personaService.getPersona('translator');
+      } catch {
+        translatorPersona = null;
+      }
       const systemPrompt =
-        (translatorPersona?.system_prompt as string) ||
+        (translatorPersona && typeof translatorPersona.system_prompt === 'string' ? translatorPersona.system_prompt : undefined) ||
         `You are a precise Spanish-English translator. Output ONLY valid JSON matching this exact structure without any additional text or explanations:
 {
   "definitions": [
@@ -190,24 +197,12 @@ export class TranslationService {
       "context": "usage context or notes"
     }
   ],
-  "conjugations": {
-    "present": ["yo form", "tú form", "él/ella/usted form", "nosotros form", "vosotros form", "ellos/ellas/ustedes form"],
-    "preterite": ["preterite forms"],
-    "future": ["future forms"]
-  },
-  "audio": {
-    "ipa": "international phonetic alphabet transcription",
-    "suggestions": ["pronunciation tips or audio notes"]
-  },
-  "related": {
-    "synonyms": ["synonym1", "synonym2"],
-    "antonyms": ["antonym1"]
-  }
+  "conjugations": {},
+  "audio": { "ipa": "", "suggestions": [] },
+  "related": { "synonyms": [], "antonyms": [] }
 }
 
-Return ONLY JSON.
-
-Incorporate regional context if provided: ${regionalContext || 'general Spanish'}. Ensure all fields are populated appropriately for the word "${request.text}" from ${request.sourceLang} to ${request.targetLang}.`;
+Return ONLY JSON.`;
 
       // Ask for dictionary entry for the headword with slang-first ordering; include regional hint.
       const userPrompt = `Headword: ${request.text}
@@ -246,6 +241,43 @@ Instructions:
       const result = this.transformOpenRouterResponse(parsedResult);
 
       console.log('✅ Translation completed for:', request.text);
+
+      // If the entry exists but has too few senses (e.g., only 1), force a retry prompting for full coverage.
+      const entrySensesCount = (result as any)?.entry?.senses?.length ?? 0;
+      // Retry when senses are missing or insufficient (< 3), to enumerate all common senses
+      if (entrySensesCount < 3) {
+        console.log(`🔁 Retry: insufficient sense coverage (${entrySensesCount}) for "${request.text}". Requesting expanded, multi-sense entry.`);
+        const userPromptExpanded = `Headword: ${request.text}
+Source language: ${request.sourceLang}
+Target language: ${request.targetLang}
+Regional preference: ${regionalContext || 'general Spanish'}
+Instructions:
+- Produce a single JSON object per the schema in the system prompt.
+- ENUMERATE ALL COMMON SENSES as distinct items in "senses" (do NOT merge). Target 6–12 senses for polysemous nouns like "cuero".
+- Keep ORDER: slang/colloquial/pejorative/vulgar FIRST; then neutral/general; then technical/archaic/localized LAST.
+- Each sense MUST include at least one bilingual (es/en) example pair.
+- Use compact labels for regions and registers.
+- Output ONLY valid JSON, no extra text.`;
+
+        const retryMessages: LLMMessage[] = [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPromptExpanded }
+        ];
+        const rawResult2 = await this.openRouterAdapter.fetchCompletion(retryMessages, options);
+        const parsedResult2 = JSON.parse(rawResult2);
+        const result2 = this.transformOpenRouterResponse(parsedResult2);
+        const entrySensesCount2 = (result2 as any)?.entry?.senses?.length ?? 0;
+
+        if (entrySensesCount2 >= entrySensesCount) {
+          console.log(`✅ Retry improved coverage: ${entrySensesCount} → ${entrySensesCount2} senses for "${request.text}".`);
+          // Cache the improved result and return
+          this.cache.set(cacheKey, { data: result2, timestamp: Date.now() });
+          this.metrics.successes.inc();
+          return result2;
+        } else {
+          console.log(`⚠️ Retry did not improve coverage (still ${entrySensesCount2}). Proceeding with first result.`);
+        }
+      }
 
       // Cache the result
       this.cache.set(cacheKey, { data: result, timestamp: Date.now() });
@@ -352,7 +384,7 @@ Instructions:
   }
 
   private generateCacheKey(request: TranslationRequest): string {
-    return `${request.text}_${request.sourceLang}_${request.targetLang}_${request.context || ''}`;
+    return `${request.text}_${request.sourceLang}_${request.targetLang}_${request.context || ''}_${this.SCHEMA_VERSION}`;
   }
 
   // Get metrics for monitoring
