@@ -36,6 +36,12 @@ export interface LLMOptions {
   model: string;
   timeout?: number;
   requestId?: string;
+  // Optional generation controls
+  temperature?: number;
+  // OpenRouter-compatible structured output controls (best-effort; model support varies)
+  // Example: { type: "json_object" } or { type: "json_schema", json_schema: {...} }
+  responseFormat?: any;
+  jsonSchema?: any;
 }
 
 export interface UserMessagePayload {

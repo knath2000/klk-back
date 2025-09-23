@@ -203,7 +203,7 @@ export class TranslationService {
   "related": { "synonyms": [], "antonyms": [] }
 }
 
-Return ONLY JSON.`;
+Return ONLY JSON. Do NOT include markdown code fences or any prose before/after the JSON object.`;
 
       // Ask for dictionary entry for the headword with slang-first ordering; include regional hint.
       const userPrompt = `Headword: ${request.text}
@@ -215,7 +215,8 @@ Instructions:
 - Ensure senses are ORDERED with slang/colloquial/pejorative/vulgar FIRST, then neutral/general, then technical/archaic/localized LAST.
 - Include at least one bilingual (es/en) example per sense.
 - Use compact labels for regions and registers.
-- Output ONLY valid JSON, no extra text.`;
+- Output ONLY valid JSON, no extra text.
+- Do NOT use markdown code fences (no \`\`\`json blocks).`;
 
       const messages: LLMMessage[] = [
         { role: 'system', content: systemPrompt },
@@ -236,11 +237,14 @@ Instructions:
       const options: LLMOptions = {
         model: effectiveModel,
         timeout: 30000,
-        requestId: `translate_${Date.now()}`
+        requestId: `translate_${Date.now()}`,
+        temperature: 0.2,
+        // Best effort: supply a JSON schema to coax strict JSON; provider may ignore, but harmless if unsupported
+        jsonSchema: this.getDictionaryEntryJsonSchema()
       };
 
       const rawResult = await this.openRouterAdapter.fetchCompletion(messages, options);
-      const parsedResult = JSON.parse(rawResult);
+      const parsedResult = this.safeParseJson(rawResult);
       const result = this.transformOpenRouterResponse(parsedResult);
 
       console.log('✅ Translation completed for:', request.text);
@@ -260,14 +264,15 @@ Instructions:
 - Keep ORDER: slang/colloquial/pejorative/vulgar FIRST; then neutral/general; then technical/archaic/localized LAST.
 - Each sense MUST include at least one bilingual (es/en) example pair.
 - Use compact labels for regions and registers.
-- Output ONLY valid JSON, no extra text.`;
+- Output ONLY valid JSON, no extra text.
+- Do NOT use markdown code fences (no \`\`\`json blocks).`;
 
         const retryMessages: LLMMessage[] = [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPromptExpanded }
         ];
         const rawResult2 = await this.openRouterAdapter.fetchCompletion(retryMessages, options);
-        const parsedResult2 = JSON.parse(rawResult2);
+        const parsedResult2 = this.safeParseJson(rawResult2);
         const result2 = this.transformOpenRouterResponse(parsedResult2);
         const entrySensesCount2 = (result2 as any)?.entry?.senses?.length ?? 0;
 
@@ -318,6 +323,103 @@ Instructions:
       console.log('🔄 TranslationService returning final fallback for', request.text);
       return finalFallback;
     }
+  }
+
+  /**
+   * Best-effort JSON sanitizer and parser to handle models that emit code fences or extra text.
+   */
+  private safeParseJson(raw: string): any {
+    if (!raw || typeof raw !== 'string') {
+      throw new Error('Empty or non-string completion from provider');
+    }
+    // 1) Strip common markdown code fences
+    let s = raw.trim()
+      .replace(/^\s*```json\s*/i, '')
+      .replace(/^\s*```\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+    // 2) Extract the outermost JSON object braces
+    const firstBrace = s.indexOf('{');
+    const lastBrace = s.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      s = s.slice(firstBrace, lastBrace + 1);
+    }
+    // 3) Attempt parse
+    try {
+      return JSON.parse(s);
+    } catch (e1) {
+      // 4) Lightweight repairs: trailing commas
+      let repaired = s.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
+      // 5) Remove BOM or stray control chars
+      repaired = repaired.replace(/^\uFEFF/, '').replace(/[\u0000-\u001F]+/g, ' ');
+      try {
+        return JSON.parse(repaired);
+      } catch (e2) {
+        // 6) As a last resort, try to find the largest JSON-looking substring
+        const match = repaired.match(/{[\s\S]*}/);
+        if (match) {
+          try {
+            return JSON.parse(match[0]);
+          } catch {}
+        }
+        // Give up and bubble up error; caller will handle fallback
+        throw new Error(`Failed to parse model JSON safely: ${String(e2)}`);
+      }
+    }
+  }
+
+  /**
+   * Minimal JSON Schema to coax a DictionaryEntry-style output.
+   * Provider may ignore, but harmless if unsupported.
+   */
+  private getDictionaryEntryJsonSchema(): any {
+    return {
+      name: "DictionaryEntry",
+      schema: {
+        type: "object",
+        properties: {
+          headword: { type: "string" },
+          pronunciation: {
+            type: "object",
+            properties: {
+              ipa: { type: "string" },
+              syllabification: { type: "string" }
+            },
+            required: ["ipa"]
+          },
+          part_of_speech: { type: "string" },
+          gender: { type: ["string", "null"], enum: ["m", "f", "mf", null] },
+          inflections: { type: "array", items: { type: "string" } },
+          senses: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                sense_number: { type: "number" },
+                registers: { type: "array", items: { type: "string" } },
+                regions: { type: "array", items: { type: "string" } },
+                gloss: { type: "string" },
+                usage_notes: { type: "string" },
+                examples: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: { es: { type: "string" }, en: { type: "string" } },
+                    required: ["es", "en"]
+                  }
+                },
+                synonyms: { type: "array", items: { type: "string" } },
+                antonyms: { type: "array", items: { type: "string" } },
+                cross_references: { type: "array", items: { type: "string" } }
+              },
+              required: ["gloss", "examples"]
+            }
+          }
+        },
+        required: ["headword", "pronunciation", "senses"]
+      },
+      strict: false
+    };
   }
 
   // Map DictionaryEntry -> legacy fields for backward compatibility with existing UI
