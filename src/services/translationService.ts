@@ -230,7 +230,7 @@ Instructions:
       const effectiveModel =
         process.env.OPENROUTER_TRANSLATE_MODEL ||
         process.env.OPENROUTER_MODEL ||
-        'meta-llama/llama-4-maverick:free';
+        'meta-llama/llama-4-maverick';
 
       console.log('🧠 Translation effective model:', effectiveModel);
 
@@ -240,8 +240,7 @@ Instructions:
         model: effectiveModel,
         timeout: 30000,
         requestId: `translate_${Date.now()}`,
-        temperature: 0.2,
-        responseFormat: useJsonObjectFormat ? { type: 'json_object' } : undefined
+        temperature: 0.2
       };
 
       const rawResult = await this.openRouterAdapter.fetchCompletion(messages, options);
