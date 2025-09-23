@@ -216,7 +216,15 @@ Instructions:
 - Include at least one bilingual (es/en) example per sense.
 - Use compact labels for regions and registers.
 - Output ONLY valid JSON, no extra text.
-- Do NOT use markdown code fences (no \`\`\`json blocks).`;
+- Do NOT use markdown code fences (no \`\`\`json blocks).
+
+Normalization (slang/SMS misspellings):
+- If the typed headword appears to be a texting/phonetic variant, normalize to the canonical headword while preserving alias spellings in "cross_references" and a USAGE NOTE (e.g., "also spelled '...')."
+- Prefer regional canonicals when applicable: for Caribbean/Venezuela prefer "mamagüevo"; alternatively accept "mamahuevo" as a common orthographic variant (omit dieresis).
+- Treat dieresis on 'güe' as orthographic; accept both "güe" and "gue" variants. Accept texting substitution "w" → "hu" (e.g., "webo" → "huevo").
+- IMPORTANT: Maintain region labels (Caribbean, Venezuela) and register "vulgar" when appropriate.
+
+Normalization candidates (aliases to consider): ${this.buildNormalizationCandidates(request.text).join(', ') || '(none)'}`;
 
       const messages: LLMMessage[] = [
         { role: 'system', content: systemPrompt },
@@ -365,6 +373,58 @@ Instructions:
         // Give up and bubble up error; caller will handle fallback
         throw new Error(`Failed to parse model JSON safely: ${String(e2)}`);
       }
+    }
+  }
+
+  /**
+   * Generate normalization alias candidates for slang/SMS spellings to guide the LLM.
+   * Example: "mamawebo" -> ["mamahuevo","mamagüevo","mamaguevo","mamahuebo","mamaguebo"]
+   * Rules applied conservatively to avoid over-normalization:
+   * - "we" → "hue" (common SMS: w ≈ hu)
+   * - "huev" ↔ "güev" (dieresis variant; both are observed regionally)
+   * - "güe" ↔ "gue" (omit/add dieresis)
+   */
+  private buildNormalizationCandidates(input: string): string[] {
+    try {
+      const term = (input || '').toLowerCase().trim();
+      if (!term) return [];
+      const out = new Set<string>();
+
+      const add = (s: string) => {
+        const t = s.toLowerCase();
+        if (t && t !== term) out.add(t.normalize('NFC'));
+      };
+
+      // Base: w → hu (limited to 'we' cluster to avoid overshoot)
+      if (term.includes('we')) add(term.replace(/we/g, 'hue'));
+
+      // If we have huevo forms, offer güevo and guevo variants
+      if (term.includes('huevo')) {
+        add(term.replace(/huevo/g, 'güevo')); // mamahuevo -> mamagüevo
+        add(term.replace(/huevo/g, 'guevo')); // mamahuevo -> mamaguevo
+      }
+      // If we have webo, offer huevo
+      if (term.includes('webo')) {
+        add(term.replace(/webo/g, 'huevo')); // mamawebo -> mamahuevo
+      }
+      // Offer dieresis toggles where relevant
+      if (term.includes('güe')) add(term.replace(/güe/g, 'gue'));
+      if (term.includes('gue')) add(term.replace(/gue/g, 'güe'));
+
+      // Heuristic: when aliases suggest the well-known insult, ensure both canonical spellings are present
+      const snapshot = Array.from(out);
+      if (/(mama.*(hue|güe)vo)/.test(snapshot.join(' ')) || /(mamawebo)/.test(term)) {
+        add('mamagüevo');
+        add('mamahuevo');
+      }
+
+      // Minor variants some communities use (less standard but seen in SMS/UD entries)
+      if (term.includes('webo')) add(term.replace(/webo/g, 'huebo')); // mamawebo -> mamahuebo
+      if (term.includes('guevo')) add(term.replace(/guevo/g, 'güevo')); // mamaguevo -> mamagüevo
+
+      return Array.from(out);
+    } catch {
+      return [];
     }
   }
 
