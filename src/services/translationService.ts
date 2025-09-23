@@ -234,13 +234,14 @@ Instructions:
 
       console.log('🧠 Translation effective model:', effectiveModel);
 
+      // For Llama 4 providers (Meta), provider returns 400 on json_schema; prefer json_object hint instead.
+      const useJsonObjectFormat = /meta-llama\/llama-4/i.test(effectiveModel);
       const options: LLMOptions = {
         model: effectiveModel,
         timeout: 30000,
         requestId: `translate_${Date.now()}`,
         temperature: 0.2,
-        // Best effort: supply a JSON schema to coax strict JSON; provider may ignore, but harmless if unsupported
-        jsonSchema: this.getDictionaryEntryJsonSchema()
+        responseFormat: useJsonObjectFormat ? { type: 'json_object' } : undefined
       };
 
       const rawResult = await this.openRouterAdapter.fetchCompletion(messages, options);
