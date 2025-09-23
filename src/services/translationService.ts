@@ -258,6 +258,10 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
       const parsedResult = this.safeParseJson(rawResult);
       const result = this.transformOpenRouterResponse(parsedResult);
 
+      // Post-transform: ensure literal-first for known verb+noun compounds (e.g., huelebicho/welebicho)
+      if ((result as any)?.entry) {
+        this.ensureLiteralSenseForCompounds((result as any).entry, request.text);
+      }
       // Reorder senses to ensure literal comes first when present
       if ((result as any)?.entry?.senses?.length) {
         (result as any).entry.senses = this.reorderSensesLiteralFirst((result as any).entry.senses);
@@ -266,6 +270,12 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
       console.log('✅ Translation completed for:', request.text);
 
       // If the entry exists but has too few senses (e.g., only 1), force a retry prompting for full coverage.
+      // Post-transform: ensure literal-first for known verb+noun compounds (e.g., huelebicho/welebicho)
+      // Reorder senses to ensure literal comes first when present
+      if ((result as any)?.entry?.senses?.length) {
+        (result as any).entry.senses = this.reorderSensesLiteralFirst((result as any).entry.senses);
+      }
+
       const entrySensesCount = (result as any)?.entry?.senses?.length ?? 0;
       // Retry when senses are missing or insufficient (< 3), to enumerate all common senses
       if (entrySensesCount < 3) {
@@ -291,10 +301,13 @@ Instructions:
         const parsedResult2 = this.safeParseJson(rawResult2);
         const result2 = this.transformOpenRouterResponse(parsedResult2);
 
+        // Post-transform for retry: enforce literal-first insertion if missing
+        if ((result2 as any)?.entry) {
+          this.ensureLiteralSenseForCompounds((result2 as any).entry, request.text);
+        }
         if ((result2 as any)?.entry?.senses?.length) {
           (result2 as any).entry.senses = this.reorderSensesLiteralFirst((result2 as any).entry.senses);
         }
-
         const entrySensesCount2 = (result2 as any)?.entry?.senses?.length ?? 0;
 
         if (entrySensesCount2 >= entrySensesCount) {
@@ -638,6 +651,59 @@ Instructions:
       if (now - value.timestamp > this.CACHE_TTL) {
         this.cache.delete(key);
       }
+    }
+  }
+
+  /**
+   * Ensure a literal morphological sense appears for known verb+noun vulgar compounds
+   * when the model omits it. Example: "welebicho" / "huelebicho" / "huele bicho"
+   * => insert literal sense "dicksniffer" with registers ['literal','slang','vulgar'].
+   */
+  private ensureLiteralSenseForCompounds(entry: any, originalText: string) {
+    try {
+      if (!entry) return;
+      const headword = String(entry.headword || '').toLowerCase();
+      const orig = String(originalText || '').toLowerCase();
+      const xrefs: string[] = Array.isArray(entry?.senses?.[0]?.cross_references)
+        ? entry.senses[0].cross_references.map((x: any) => String(x || '').toLowerCase())
+        : [];
+
+      // Match any of the known variants in headword, original query, or first sense cross refs
+      const matchesWelebicho =
+        /\bwelebicho\b/.test(headword) || /\bhuelebicho\b/.test(headword) || /\bhuele\s*bicho\b/.test(headword) ||
+        /\bwelebicho\b/.test(orig)     || /\bhuelebicho\b/.test(orig)     || /\bhuele\s*bicho\b/.test(orig)     ||
+        xrefs.some((r) => /\b(welebicho|huelebicho|huele\s*bicho)\b/.test(r));
+
+      if (!matchesWelebicho) return;
+
+      const senses: any[] = Array.isArray(entry.senses) ? entry.senses : [];
+      const hasLiteral =
+        senses.some((s) => Array.isArray(s?.registers) && s.registers.map((r: any) => String(r || '').toLowerCase()).includes('literal')) ||
+        senses.some((s) => typeof s?.gloss === 'string' && /dick\s*sniffer|dicksniffer|penis\s*sniffer/i.test(s.gloss || ''));
+      if (hasLiteral) return;
+
+      // Insert literal sense at the front
+      const literalSense = {
+        sense_number: 1,
+        registers: ['literal', 'slang', 'vulgar'],
+        regions: ['Puerto Rico', 'Caribbean', 'Venezuela'],
+        gloss: 'dicksniffer',
+        usage_notes: 'Literal morphological reading of "huele bicho" (oler + bicho). Highly offensive regional slang.',
+        examples: [
+          { es: 'Ese welebicho anda hablando babosadas.', en: 'That dicksniffer is talking nonsense.' }
+        ],
+        synonyms: [],
+        antonyms: [],
+        cross_references: Array.from(new Set([
+          'huele bicho',
+          'huelebicho',
+          'welebicho'
+        ]))
+      };
+
+      entry.senses = [literalSense, ...senses].map((s: any, i: number) => ({ ...s, sense_number: i + 1 }));
+    } catch {
+      // no-op on safe guard
     }
   }
 }
