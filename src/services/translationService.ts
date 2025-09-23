@@ -218,11 +218,14 @@ Instructions:
 - Output ONLY valid JSON, no extra text.
 - Do NOT use markdown code fences (no \`\`\`json blocks).
 
+Literal translation requirement (verb+noun vulgar compounds):
+- When the headword (or any alias) is a verb+noun vulgar compound (e.g., "huele bicho" or its texting variant "welebicho"), include a FIRST sense that gives the literal morphological meaning (e.g., gloss "dicksniffer") and mark appropriate registers (at minimum ["slang","vulgar"]) and regions (e.g., Puerto Rico / Caribbean / Venezuela). Follow with idiomatic senses (e.g., jerk/asshole) after the literal sense.
+
 Normalization (slang/SMS misspellings):
 - If the typed headword appears to be a texting/phonetic variant, normalize to the canonical headword while preserving alias spellings in "cross_references" and a USAGE NOTE (e.g., "also spelled '...')."
 - Prefer regional canonicals when applicable: for Caribbean/Venezuela prefer "mamagüevo"; alternatively accept "mamahuevo" as a common orthographic variant (omit dieresis).
 - Treat dieresis on 'güe' as orthographic; accept both "güe" and "gue" variants. Accept texting substitution "w" → "hu" (e.g., "webo" → "huevo").
-- IMPORTANT: Maintain region labels (Caribbean, Venezuela) and register "vulgar" when appropriate.
+- IMPORTANT: Maintain region labels (Caribbean, Venezuela, Puerto Rico as applicable) and register "vulgar" when appropriate.
 
 Normalization candidates (aliases to consider): ${this.buildNormalizationCandidates(request.text).join(', ') || '(none)'}`;
 
@@ -255,6 +258,11 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
       const parsedResult = this.safeParseJson(rawResult);
       const result = this.transformOpenRouterResponse(parsedResult);
 
+      // Reorder senses to ensure literal comes first when present
+      if ((result as any)?.entry?.senses?.length) {
+        (result as any).entry.senses = this.reorderSensesLiteralFirst((result as any).entry.senses);
+      }
+
       console.log('✅ Translation completed for:', request.text);
 
       // If the entry exists but has too few senses (e.g., only 1), force a retry prompting for full coverage.
@@ -282,6 +290,11 @@ Instructions:
         const rawResult2 = await this.openRouterAdapter.fetchCompletion(retryMessages, options);
         const parsedResult2 = this.safeParseJson(rawResult2);
         const result2 = this.transformOpenRouterResponse(parsedResult2);
+
+        if ((result2 as any)?.entry?.senses?.length) {
+          (result2 as any).entry.senses = this.reorderSensesLiteralFirst((result2 as any).entry.senses);
+        }
+
         const entrySensesCount2 = (result2 as any)?.entry?.senses?.length ?? 0;
 
         if (entrySensesCount2 >= entrySensesCount) {
@@ -331,6 +344,27 @@ Instructions:
       console.log('🔄 TranslationService returning final fallback for', request.text);
       return finalFallback;
     }
+  }
+
+  /**
+   * Reorder senses so that 'literal' is highest priority, followed by
+   * slang/colloquial/pejorative/vulgar, then neutral/general, then technical/archaic/localized.
+   * This ensures literal translations like "dicksniffer" appear first for compounds (e.g., huelebicho/welebicho).
+   */
+  private reorderSensesLiteralFirst(senses: any[]): any[] {
+    const rank = (s: any): number => {
+      const regs: string[] = Array.isArray(s?.registers) ? s.registers.map((r: any) => String(r || '').toLowerCase()) : [];
+      const has = (k: string) => regs.includes(k);
+      // 0: literal (regardless of other tags)
+      if (has('literal')) return 0;
+      // 1: strong slang markers
+      if (has('slang') || has('colloquial') || has('pejorative') || has('vulgar')) return 1;
+      // 3: technical/specialized/archaic/localized last
+      if (has('technical') || has('archaic') || has('localized') || has('regionalism')) return 3;
+      // 2: neutral/general
+      return 2;
+    };
+    return [...senses].sort((a, b) => rank(a) - rank(b));
   }
 
   /**
@@ -407,6 +441,20 @@ Instructions:
       if (term.includes('webo')) {
         add(term.replace(/webo/g, 'huevo')); // mamawebo -> mamahuevo
       }
+      // Huelebicho/welebicho normalization (verb+noun insult)
+      if (term.includes('welebicho')) {
+        add(term.replace(/welebicho/g, 'huelebicho'));
+        add(term.replace(/welebicho/g, 'huele bicho'));
+      }
+      if (term.includes('huelebicho')) {
+        add(term.replace(/huelebicho/g, 'welebicho'));
+        add(term.replace(/huelebicho/g, 'huele bicho'));
+      }
+      if (/\bhuele\s*bicho\b/.test(term)) {
+        add(term.replace(/\bhuele\s*bicho\b/g, 'huelebicho'));
+        add(term.replace(/\bhuele\s*bicho\b/g, 'welebicho'));
+      }
+
       // Offer dieresis toggles where relevant
       if (term.includes('güe')) add(term.replace(/güe/g, 'gue'));
       if (term.includes('gue')) add(term.replace(/gue/g, 'güe'));
