@@ -85,6 +85,7 @@ export class TranslationService {
     // Log env vars to verify loading
     console.log('TranslationService initialized with OPENROUTER_BASE_URL:', process.env.OPENROUTER_BASE_URL || 'DEFAULT (openrouter.ai)');
     console.log('OPENROUTER_MODEL:', process.env.OPENROUTER_MODEL || 'DEFAULT (gpt-4o-mini)');
+    console.log('OPENROUTER_TRANSLATE_MODEL:', process.env.OPENROUTER_TRANSLATE_MODEL || 'DEFAULT (meta-llama/llama-4-maverick:free)');
   }
 
   private transformOpenRouterResponse(openRouterResponse: any): TranslationResponse {
@@ -228,7 +229,9 @@ Instructions:
       const effectiveModel =
         process.env.OPENROUTER_TRANSLATE_MODEL ||
         process.env.OPENROUTER_MODEL ||
-        'meta-llama/llama-3.3-8b-instruct:free';
+        'meta-llama/llama-4-maverick:free';
+
+      console.log('🧠 Translation effective model:', effectiveModel);
 
       const options: LLMOptions = {
         model: effectiveModel,
