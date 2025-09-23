@@ -80,6 +80,23 @@ export class TranslationService {
     errors: { count: 0, inc: () => this.metrics.errors.count++ }
   };
 
+  /**
+   * Heuristic to detect likely English headwords to trigger EN→ES directives.
+   * - If user explicitly sets sourceLang 'en', treat as English.
+   * - Otherwise, a lightweight heuristic: mostly ASCII letters, spaces, hyphens/apostrophes,
+   *   no common Spanish diacritics. Not perfect, but sufficient to gate prompt rules.
+   */
+  private isProbablyEnglish(input: string | undefined, hintedSrc?: string): boolean {
+    if ((hintedSrc || '').toLowerCase() === 'en') return true;
+    const s = (input || '').trim();
+    if (!s) return false;
+    const hasSpanishDiacritics = /[áéíóúüñÁÉÍÓÚÜÑ]/.test(s);
+    if (hasSpanishDiacritics) return false;
+    // Allow letters, digits, space, dash, apostrophe; penalize heavy punctuation or underscores
+    const asciiLike = /^[A-Za-z0-9\s\-\’\'\.\/]+$/.test(s);
+    return asciiLike;
+  }
+
   constructor(openRouterAdapter: OpenRouterAdapter) {
     this.openRouterAdapter = openRouterAdapter;
     // Log env vars to verify loading
@@ -205,10 +222,26 @@ export class TranslationService {
 
 Return ONLY JSON. Do NOT include markdown code fences or any prose before/after the JSON object.`;
 
-      // Ask for dictionary entry for the headword with slang-first ordering; include regional hint.
+      const isEN = this.isProbablyEnglish(request.text, request.sourceLang);
+      // Default languages when missing: for detected English inputs, default to EN→ES
+      const effectiveSource = (request.sourceLang && request.sourceLang.trim()) || (isEN ? 'en' : (request.sourceLang || ''));
+      const effectiveTarget = (request.targetLang && request.targetLang.trim()) || (isEN ? 'es' : (request.targetLang || 'es'));
+
+      // EN→ES dictionary entry directives (from MCP research) appended only when English is detected
+      const enToEsDirectives = isEN ? `
+EN→ES Dictionary Directives (for English input):
+- Target entry language: Spanish. Provide the headword (entrada) in Spanish (canonical or common colloquial form) and mark region/register per sense (e.g., México, España, Caribe; coloquial, vulgar, juvenil).
+- Senses: If the English term has both literal and idiomatic meanings, create separate sub-senses: first the literal, then the most common idiomatic one(s). Prefer regional Spanish slang equivalents when the English input is slang (e.g., GOAT → el/la mejor; la mera mera [México]; la hostia [España], with labels).
+- Examples: Provide one or two examples per sense, Spanish sentence followed by the English equivalent in parentheses. Keep metalanguage in Spanish; only the parenthetical line is English.
+- Synonyms/Antonyms: Provide Spanish-only synonyms/antonyms when natural and regionally appropriate.
+- Maintain Spanish-only metadata and labels; avoid English glosses as headwords. Do NOT use response_format/json_schema; output must remain plain text or JSON as instructed by the core prompt.
+` : ``;
+
+      // Find the keyword to start the prompt
+      const findKeyword = /\bHeadword:\b<\/injectKeyword>.*/i.exec(enToEsDirectives);
       const userPrompt = `Headword: ${request.text}
-Source language: ${request.sourceLang}
-Target language: ${request.targetLang}
+Source language: ${effectiveSource}
+Target language: ${effectiveTarget}
 Regional preference: ${regionalContext || 'general Spanish'}
 Instructions:
 - Produce a single JSON object per the schema in the system prompt.
@@ -218,15 +251,17 @@ Instructions:
 - Output ONLY valid JSON, no extra text.
 - Do NOT use markdown code fences (no \`\`\`json blocks).
 
-Literal translation requirement (verb+noun vulgar compounds):
-- When the headword (or any alias) is a verb+noun vulgar compound (e.g., "huele bicho" or its texting variant "welebicho"), include a FIRST sense that gives the literal morphological meaning (e.g., gloss "dicksniffer") and mark appropriate registers (at minimum ["slang","vulgar"]) and regions (e.g., Puerto Rico / Caribbean / Venezuela). Follow with idiomatic senses (e.g., jerk/asshole) after the literal sense.
-
+${findKeyword ? findKeyword[0].replace(/\bHeadword:\b<\/injectKeyword>/i, '') : ''}
 Normalization (slang/SMS misspellings):
 - If the typed headword appears to be a texting/phonetic variant, normalize to the canonical headword while preserving alias spellings in "cross_references" and a USAGE NOTE (e.g., "also spelled '...')."
 - Prefer regional canonicals when applicable: for Caribbean/Venezuela prefer "mamagüevo"; alternatively accept "mamahuevo" as a common orthographic variant (omit dieresis).
 - Treat dieresis on 'güe' as orthographic; accept both "güe" and "gue" variants. Accept texting substitution "w" → "hu" (e.g., "webo" → "huevo").
 - IMPORTANT: Maintain region labels (Caribbean, Venezuela, Puerto Rico as applicable) and register "vulgar" when appropriate.
 
+Literal translation requirement (verb+noun vulgar compounds):
+- When the headword (or any alias) is a verb+noun vulgar compound (e.g., "huele bicho" or its texting variant "welebicho"), include a FIRST sense that gives the literal morphological meaning (e.g., gloss "dicksniffer") and mark appropriate registers (at minimum ["slang","vulgar"]) and regions (e.g., Puerto Rico / Caribbean / Venezuela). Follow with idiomatic senses (e.g., jerk/asshole) after the literal sense.
+
+${enToEsDirectives}
 Normalization candidates (aliases to consider): ${this.buildNormalizationCandidates(request.text).join(', ') || '(none)'}`;
 
       const messages: LLMMessage[] = [
@@ -281,8 +316,8 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
       if (entrySensesCount < 3) {
         console.log(`🔁 Retry: insufficient sense coverage (${entrySensesCount}) for "${request.text}". Requesting expanded, multi-sense entry.`);
         const userPromptExpanded = `Headword: ${request.text}
-Source language: ${request.sourceLang}
-Target language: ${request.targetLang}
+Source language: ${effectiveSource}
+Target language: ${effectiveTarget}
 Regional preference: ${regionalContext || 'general Spanish'}
 Instructions:
 - Produce a single JSON object per the schema in the system prompt.
