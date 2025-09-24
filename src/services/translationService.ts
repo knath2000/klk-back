@@ -65,6 +65,8 @@ interface DictionaryEntry {
     synonyms?: string[];
     antonyms?: string[];
     cross_references?: string[];
+    // New: explicit Spanish translation/lemma for this sense (for EN→ES visibility)
+    translation_es?: string;
   }>;
 }
 
@@ -235,6 +237,7 @@ EN→ES Dictionary Directives (for English input):
 - Examples: Provide one or two examples per sense, Spanish sentence followed by the English equivalent in parentheses. Keep metalanguage in Spanish; only the parenthetical line is English.
 - Synonyms/Antonyms: Provide Spanish-only synonyms/antonyms when natural and regionally appropriate.
 - Maintain Spanish-only metadata and labels; avoid English glosses as headwords. Do NOT use response_format/json_schema; output must remain plain text or JSON as instructed by the core prompt.
+- IMPORTANT (visibility): For each sense, include "translation_es" (string) with the most natural Spanish word/phrase that translates the English headword in that specific sense (e.g., "línea del frente", "primera línea").
 ` : ``;
 
       // Find the keyword to start the prompt
@@ -566,7 +569,9 @@ Instructions:
                 },
                 synonyms: { type: "array", items: { type: "string" } },
                 antonyms: { type: "array", items: { type: "string" } },
-                cross_references: { type: "array", items: { type: "string" } }
+                cross_references: { type: "array", items: { type: "string" } },
+                // New: explicit Spanish translation field per sense (optional)
+                translation_es: { type: "string" }
               },
               required: ["gloss", "examples"]
             }
@@ -585,9 +590,15 @@ Instructions:
     const definitions = entry.senses.map((s) => {
       const usageLabels = (s.registers || []).join(', ');
       const examplesStrings = (s.examples || []).map((ex) => `${ex.es} — ${ex.en}`);
+      // Prefer explicit Spanish translation if provided for EN→ES visibility
+      const spanishSense = (s as any).translation_es && String((s as any).translation_es).trim()
+        ? String((s as any).translation_es).trim()
+        : undefined;
+      const primaryText = spanishSense || s.gloss;
+
       return {
-        text: s.gloss,
-        meaning: s.gloss,
+        text: primaryText,          // Show Spanish translation when available
+        meaning: primaryText,       // Mirror in meaning for legacy consumers
         partOfSpeech: pos,
         pos,
         usage: usageLabels || undefined,
