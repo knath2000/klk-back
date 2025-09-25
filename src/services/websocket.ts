@@ -6,6 +6,7 @@ import { collaborationService } from './collaborationService';
 import { conversationService } from './conversationService';
 import { translationService } from './translationService';
 import type { UserMessagePayload } from '../types';
+import { jwtVerify, createRemoteJWKSet } from 'jose';
 
 interface WebSocketUser {
   userId: string;
@@ -26,8 +27,62 @@ class WebSocketService {
     errors: { count: 0, inc: () => this.metrics.errors.count++ }
   };
 
+  // Neon/Stack Auth config for Socket.IO auth
+  private static STACK_PROJECT_ID =
+    process.env.NEXT_PUBLIC_STACK_PROJECT_ID || process.env.STACK_PROJECT_ID || '';
+  private static EXPECTED_ISSUER = WebSocketService.STACK_PROJECT_ID
+    ? `https://api.stack-auth.com/api/v1/projects/${WebSocketService.STACK_PROJECT_ID}`
+    : undefined;
+  private static JWKS = WebSocketService.STACK_PROJECT_ID
+    ? createRemoteJWKSet(
+        new URL(
+          `https://api.stack-auth.com/api/v1/projects/${WebSocketService.STACK_PROJECT_ID}/.well-known/jwks.json`
+        )
+      )
+    : undefined;
+  private static EXPECTED_AUD = process.env.STACK_EXPECTED_AUD; // optional
+  private static REQUIRE_AUTH = process.env.REQUIRE_AUTH === 'true';
+  
   constructor(io: Server) {
     this.io = io;
+    // Socket.IO auth middleware (JWT via Neon/Stack Auth). Optional gating with REQUIRE_AUTH.
+    this.io.use(async (socket, next) => {
+      try {
+        const token = socket.handshake?.auth?.token as string | undefined;
+        if (!token) {
+          if (WebSocketService.REQUIRE_AUTH) {
+            return next(new Error('Token required'));
+          } else {
+            // Allow anonymous for now (until frontend starts sending tokens)
+            return next();
+          }
+        }
+        if (!WebSocketService.JWKS || !WebSocketService.EXPECTED_ISSUER) {
+          if (WebSocketService.REQUIRE_AUTH) {
+            return next(new Error('Auth not configured'));
+          } else {
+            return next();
+          }
+        }
+        const { payload } = await jwtVerify(token, WebSocketService.JWKS, {
+          issuer: WebSocketService.EXPECTED_ISSUER,
+          audience: WebSocketService.EXPECTED_AUD
+        });
+        (socket as any).user = {
+          sub: payload.sub,
+          email: (payload as any).email,
+          name: (payload as any).name,
+          claims: payload
+        };
+        return next();
+      } catch (err: any) {
+        if (WebSocketService.REQUIRE_AUTH) {
+          return next(new Error('Invalid token'));
+        }
+        // Soft-fail if not enforced
+        return next();
+      }
+    });
     this.setupWebSocketHandlers();
     this.startIdleTimeoutCleanup();
   }
@@ -161,12 +216,13 @@ class WebSocketService {
           // Call translation service with error handling
           let result;
           try {
+            const authedUserId = (socket as any).user?.sub || socket.id;
             result = await translationService.translate({
               text: data.query,
               sourceLang: data.language || 'en',
               targetLang: 'es',
               context: data.context,
-              userId: socket.id // Use socket ID for session
+              userId: authedUserId
             });
             console.log('✅ Translation service returned result for:', data.query, 'keys:', Object.keys(result));
           } catch (translationError: any) {
@@ -368,17 +424,19 @@ class WebSocketService {
 
       // User authentication
       socket.on('authenticate', (userId: string) => {
+        const authedUserId = (socket as any).user?.sub || userId;
         this.users.set(socket.id, {
-          userId,
+          userId: authedUserId,
           socket,
           rooms: new Set()
         });
-        console.log('User authenticated:', userId);
+        console.log('User authenticated:', authedUserId);
       });
 
       // Join conversation room
       socket.on('join_conversation', async (data: { conversationId: string; userId: string }) => {
-        const { conversationId, userId } = data;
+        const { conversationId } = data;
+        const userId = (socket as any).user?.sub || data.userId;
         
         try {
           // Check if user has access to conversation
@@ -421,7 +479,8 @@ class WebSocketService {
 
       // Leave conversation room
       socket.on('leave_conversation', (data: { conversationId: string; userId: string }) => {
-        const { conversationId, userId } = data;
+        const { conversationId } = data;
+        const userId = (socket as any).user?.sub || data.userId;
         
         socket.leave(conversationId);
         
@@ -455,7 +514,8 @@ class WebSocketService {
         role: 'user' | 'assistant';
         messageId?: string;
       }) => {
-        const { conversationId, userId, content, role, messageId } = data;
+        const { conversationId, content, role, messageId } = data;
+        const userId = (socket as any).user?.sub || data.userId;
         
         try {
           // Check if user has access to conversation
@@ -497,7 +557,8 @@ class WebSocketService {
 
       // Typing indicator
       socket.on('typing', (data: { conversationId: string; userId: string; isTyping: boolean }) => {
-        const { conversationId, userId, isTyping } = data;
+        const { conversationId, isTyping } = data;
+        const userId = (socket as any).user?.sub || data.userId;
         
         // Broadcast typing status to all users in the conversation room
         socket.to(conversationId).emit('user_typing', {
@@ -510,7 +571,8 @@ class WebSocketService {
 
       // Conversation shared
       socket.on('conversation_shared', (data: { conversationId: string; sharedWith: string; permission: string; userId: string }) => {
-        const { conversationId, sharedWith, permission, userId } = data;
+        const { conversationId, sharedWith, permission } = data;
+        const userId = (socket as any).user?.sub || data.userId;
         
         // Notify the user who was shared with (if they're online)
         this.sendToUser(sharedWith, 'conversation_shared_with_you', {

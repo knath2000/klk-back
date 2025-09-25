@@ -18,6 +18,7 @@ import translateRouter from './routes/translate';
 
 // Import services
 import { getSupabase } from './services/db';
+import { neonAuthMiddleware } from './middleware/auth';
 import { collaborationService } from './services/collaborationService';
 import { initializeWebSocket } from './services/websocket';
 import { translationService } from './services/translationService';
@@ -76,29 +77,7 @@ server.options('*', cors());
 
 server.use(express.json());
 
-// Authentication middleware
-server.use((req, res, next) => {
-  // Simple auth check - in production, use proper JWT validation
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    // TODO: Validate JWT token properly
-    (req as any).user = { id: 'user-id-from-token' }; // Mock user for now
-  }
-  next();
-});
-
-// API Routes
-server.use('/api/conversations', conversationsRouter);
-server.use('/api/personas', personasRouter);
-server.use('/api/models', modelsRouter);
-server.use('/api/subscription', subscriptionRouter);
-server.use('/api/search', searchRouter);
-server.use('/api/teams', teamsRouter);
-server.use('/api/analytics', analyticsRouter);
-server.use('/api/collaboration', collaborationRouter);
-server.use('/api/translate', translateRouter);
-
-// Health check endpoint
+// Public routes (no auth)
 server.get('/api/health', (req, res) => {
   res.status(200).json({
     status: 'ok',
@@ -133,6 +112,19 @@ server.get('/api/test-openrouter', async (req, res) => {
     });
   }
 });
+
+// Authenticated API routes (require valid Neon Auth JWT)
+server.use('/api/conversations', neonAuthMiddleware, conversationsRouter);
+server.use('/api/subscription', neonAuthMiddleware, subscriptionRouter);
+server.use('/api/search', neonAuthMiddleware, searchRouter);
+server.use('/api/teams', neonAuthMiddleware, teamsRouter);
+server.use('/api/analytics', neonAuthMiddleware, analyticsRouter);
+server.use('/api/collaboration', neonAuthMiddleware, collaborationRouter);
+server.use('/api/translate', neonAuthMiddleware, translateRouter);
+
+// Optionally public (leave personas + models open, or secure later if needed)
+server.use('/api/personas', personasRouter);
+server.use('/api/models', modelsRouter);
 
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {

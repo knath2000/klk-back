@@ -7,6 +7,11 @@ declare class WebSocketService {
     private socketActivity;
     private idleTimeoutCleanup;
     private metrics;
+    private static STACK_PROJECT_ID;
+    private static EXPECTED_ISSUER;
+    private static JWKS;
+    private static EXPECTED_AUD;
+    private static REQUIRE_AUTH;
     constructor(io: Server);
     private startIdleTimeoutCleanup;
     private cleanupIdleConnections;

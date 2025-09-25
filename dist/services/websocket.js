@@ -6,6 +6,7 @@ const personaService_1 = require("./personaService");
 const collaborationService_1 = require("./collaborationService");
 const conversationService_1 = require("./conversationService");
 const translationService_1 = require("./translationService");
+const jose_1 = require("jose");
 class WebSocketService {
     constructor(io) {
         this.users = new Map();
@@ -19,6 +20,47 @@ class WebSocketService {
             errors: { count: 0, inc: () => this.metrics.errors.count++ }
         };
         this.io = io;
+        // Socket.IO auth middleware (JWT via Neon/Stack Auth). Optional gating with REQUIRE_AUTH.
+        this.io.use(async (socket, next) => {
+            try {
+                const token = socket.handshake?.auth?.token;
+                if (!token) {
+                    if (WebSocketService.REQUIRE_AUTH) {
+                        return next(new Error('Token required'));
+                    }
+                    else {
+                        // Allow anonymous for now (until frontend starts sending tokens)
+                        return next();
+                    }
+                }
+                if (!WebSocketService.JWKS || !WebSocketService.EXPECTED_ISSUER) {
+                    if (WebSocketService.REQUIRE_AUTH) {
+                        return next(new Error('Auth not configured'));
+                    }
+                    else {
+                        return next();
+                    }
+                }
+                const { payload } = await (0, jose_1.jwtVerify)(token, WebSocketService.JWKS, {
+                    issuer: WebSocketService.EXPECTED_ISSUER,
+                    audience: WebSocketService.EXPECTED_AUD
+                });
+                socket.user = {
+                    sub: payload.sub,
+                    email: payload.email,
+                    name: payload.name,
+                    claims: payload
+                };
+                return next();
+            }
+            catch (err) {
+                if (WebSocketService.REQUIRE_AUTH) {
+                    return next(new Error('Invalid token'));
+                }
+                // Soft-fail if not enforced
+                return next();
+            }
+        });
         this.setupWebSocketHandlers();
         this.startIdleTimeoutCleanup();
     }
@@ -131,12 +173,13 @@ class WebSocketService {
                     // Call translation service with error handling
                     let result;
                     try {
+                        const authedUserId = socket.user?.sub || socket.id;
                         result = await translationService_1.translationService.translate({
                             text: data.query,
                             sourceLang: data.language || 'en',
                             targetLang: 'es',
                             context: data.context,
-                            userId: socket.id // Use socket ID for session
+                            userId: authedUserId
                         });
                         console.log('✅ Translation service returned result for:', data.query, 'keys:', Object.keys(result));
                     }
@@ -317,16 +360,18 @@ class WebSocketService {
             });
             // User authentication
             socket.on('authenticate', (userId) => {
+                const authedUserId = socket.user?.sub || userId;
                 this.users.set(socket.id, {
-                    userId,
+                    userId: authedUserId,
                     socket,
                     rooms: new Set()
                 });
-                console.log('User authenticated:', userId);
+                console.log('User authenticated:', authedUserId);
             });
             // Join conversation room
             socket.on('join_conversation', async (data) => {
-                const { conversationId, userId } = data;
+                const { conversationId } = data;
+                const userId = socket.user?.sub || data.userId;
                 try {
                     // Check if user has access to conversation
                     const hasAccess = await collaborationService_1.collaborationService.hasAccessToConversation(conversationId, userId);
@@ -362,7 +407,8 @@ class WebSocketService {
             });
             // Leave conversation room
             socket.on('leave_conversation', (data) => {
-                const { conversationId, userId } = data;
+                const { conversationId } = data;
+                const userId = socket.user?.sub || data.userId;
                 socket.leave(conversationId);
                 // Remove user from conversation room tracking
                 const room = this.conversationRooms.get(conversationId);
@@ -384,7 +430,8 @@ class WebSocketService {
             });
             // Send message to conversation
             socket.on('send_message', async (data) => {
-                const { conversationId, userId, content, role, messageId } = data;
+                const { conversationId, content, role, messageId } = data;
+                const userId = socket.user?.sub || data.userId;
                 try {
                     // Check if user has access to conversation
                     const hasAccess = await collaborationService_1.collaborationService.hasAccessToConversation(conversationId, userId);
@@ -420,7 +467,8 @@ class WebSocketService {
             });
             // Typing indicator
             socket.on('typing', (data) => {
-                const { conversationId, userId, isTyping } = data;
+                const { conversationId, isTyping } = data;
+                const userId = socket.user?.sub || data.userId;
                 // Broadcast typing status to all users in the conversation room
                 socket.to(conversationId).emit('user_typing', {
                     userId,
@@ -431,7 +479,8 @@ class WebSocketService {
             });
             // Conversation shared
             socket.on('conversation_shared', (data) => {
-                const { conversationId, sharedWith, permission, userId } = data;
+                const { conversationId, sharedWith, permission } = data;
+                const userId = socket.user?.sub || data.userId;
                 // Notify the user who was shared with (if they're online)
                 this.sendToUser(sharedWith, 'conversation_shared_with_you', {
                     conversationId,
@@ -533,6 +582,16 @@ class WebSocketService {
         return room ? Array.from(room) : [];
     }
 }
+// Neon/Stack Auth config for Socket.IO auth
+WebSocketService.STACK_PROJECT_ID = process.env.NEXT_PUBLIC_STACK_PROJECT_ID || process.env.STACK_PROJECT_ID || '';
+WebSocketService.EXPECTED_ISSUER = WebSocketService.STACK_PROJECT_ID
+    ? `https://api.stack-auth.com/api/v1/projects/${WebSocketService.STACK_PROJECT_ID}`
+    : undefined;
+WebSocketService.JWKS = WebSocketService.STACK_PROJECT_ID
+    ? (0, jose_1.createRemoteJWKSet)(new URL(`https://api.stack-auth.com/api/v1/projects/${WebSocketService.STACK_PROJECT_ID}/.well-known/jwks.json`))
+    : undefined;
+WebSocketService.EXPECTED_AUD = process.env.STACK_EXPECTED_AUD; // optional
+WebSocketService.REQUIRE_AUTH = process.env.REQUIRE_AUTH === 'true';
 // Export function to initialize WebSocket service
 function initializeWebSocket(io) {
     return new WebSocketService(io);

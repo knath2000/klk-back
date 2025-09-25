@@ -51,6 +51,7 @@ const teams_1 = __importDefault(require("./routes/teams"));
 const analytics_1 = __importDefault(require("./routes/analytics"));
 const collaboration_1 = __importDefault(require("./routes/collaboration"));
 const translate_1 = __importDefault(require("./routes/translate"));
+const auth_1 = require("./middleware/auth");
 const websocket_1 = require("./services/websocket");
 dotenv_1.default.config();
 // Log environment variables for debugging
@@ -98,27 +99,7 @@ server.use((0, cors_1.default)({
 // Add OPTIONS handler for preflight
 server.options('*', (0, cors_1.default)());
 server.use(express_1.default.json());
-// Authentication middleware
-server.use((req, res, next) => {
-    // Simple auth check - in production, use proper JWT validation
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        // TODO: Validate JWT token properly
-        req.user = { id: 'user-id-from-token' }; // Mock user for now
-    }
-    next();
-});
-// API Routes
-server.use('/api/conversations', conversations_1.default);
-server.use('/api/personas', personas_1.default);
-server.use('/api/models', models_1.default);
-server.use('/api/subscription', subscription_1.default);
-server.use('/api/search', search_1.default);
-server.use('/api/teams', teams_1.default);
-server.use('/api/analytics', analytics_1.default);
-server.use('/api/collaboration', collaboration_1.default);
-server.use('/api/translate', translate_1.default);
-// Health check endpoint
+// Public routes (no auth)
 server.get('/api/health', (req, res) => {
     res.status(200).json({
         status: 'ok',
@@ -150,6 +131,17 @@ server.get('/api/test-openrouter', async (req, res) => {
         });
     }
 });
+// Authenticated API routes (require valid Neon Auth JWT)
+server.use('/api/conversations', auth_1.neonAuthMiddleware, conversations_1.default);
+server.use('/api/subscription', auth_1.neonAuthMiddleware, subscription_1.default);
+server.use('/api/search', auth_1.neonAuthMiddleware, search_1.default);
+server.use('/api/teams', auth_1.neonAuthMiddleware, teams_1.default);
+server.use('/api/analytics', auth_1.neonAuthMiddleware, analytics_1.default);
+server.use('/api/collaboration', auth_1.neonAuthMiddleware, collaboration_1.default);
+server.use('/api/translate', auth_1.neonAuthMiddleware, translate_1.default);
+// Optionally public (leave personas + models open, or secure later if needed)
+server.use('/api/personas', personas_1.default);
+server.use('/api/models', models_1.default);
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
