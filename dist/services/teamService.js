@@ -1,195 +1,208 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.teamService = exports.TeamService = void 0;
-const db_1 = require("./db");
+const client_1 = require("@prisma/client");
 class TeamService {
+    constructor() {
+        this.prisma = new client_1.PrismaClient();
+    }
     /**
      * Create a new team
      */
     async createTeam(teamData) {
-        const supabase = (0, db_1.getSupabase)();
-        const team = {
-            id: this.generateId(),
-            ...teamData,
-            created_at: new Date(),
-            updated_at: new Date(),
-            is_active: true
-        };
-        const { data, error } = await supabase
-            .from('teams')
-            .insert([team])
-            .select()
-            .single();
-        if (error) {
-            throw new Error(`Failed to create team: ${error.message}`);
-        }
-        // Add creator as owner
-        await this.addTeamMember(team.id, teamData.owner_id, 'owner');
-        return data;
+        const now = new Date();
+        const teamId = this.generateId();
+        const created = await this.prisma.$transaction(async (tx) => {
+            const teamRow = await tx.team.create({
+                data: {
+                    id: teamId,
+                    name: teamData.name,
+                    description: teamData.description ?? null,
+                    owner_id: teamData.owner_id,
+                    created_by: teamData.created_by,
+                    created_at: now,
+                    updated_at: now,
+                    is_active: true
+                }
+            });
+            await tx.teamMember.create({
+                data: {
+                    id: this.generateId(),
+                    team_id: teamRow.id,
+                    user_id: teamData.owner_id,
+                    role: 'owner',
+                    joined_at: now,
+                    is_active: true
+                }
+            });
+            return teamRow;
+        });
+        return created;
     }
     /**
      * Get team by ID
      */
     async getTeam(id) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('teams')
-            .select('*')
-            .eq('id', id)
-            .eq('is_active', true)
-            .single();
-        if (error) {
-            return null;
-        }
-        return data;
+        const row = await this.prisma.team.findFirst({
+            where: { id, is_active: true }
+        });
+        return row ?? null;
     }
     /**
      * Get user's teams
      */
     async getUserTeams(userId) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('teams')
-            .select(`
-        *,
-        members:team_members(user_id, role, joined_at, is_active)
-      `)
-            .eq('members.user_id', userId)
-            .eq('members.is_active', true)
-            .eq('is_active', true)
-            .order('created_at', { ascending: false });
-        if (error) {
-            throw new Error(`Failed to fetch user teams: ${error.message}`);
-        }
-        return data;
+        const teams = await this.prisma.team.findMany({
+            where: {
+                is_active: true,
+                members: {
+                    some: { user_id: userId, is_active: true }
+                }
+            },
+            orderBy: { created_at: 'desc' },
+            include: {
+                members: {
+                    select: { user_id: true, role: true, joined_at: true, is_active: true }
+                }
+            }
+        });
+        return teams;
     }
     /**
      * Add member to team
      */
     async addTeamMember(teamId, userId, role = 'member') {
-        const supabase = (0, db_1.getSupabase)();
-        const teamMember = {
-            id: this.generateId(),
-            team_id: teamId,
-            user_id: userId,
-            role,
-            joined_at: new Date(),
-            is_active: true
-        };
-        const { data, error } = await supabase
-            .from('team_members')
-            .insert([teamMember])
-            .select()
-            .single();
-        if (error) {
-            throw new Error(`Failed to add team member: ${error.message}`);
-        }
-        return data;
+        const row = await this.prisma.teamMember.create({
+            data: {
+                id: this.generateId(),
+                team_id: teamId,
+                user_id: userId,
+                role,
+                joined_at: new Date(),
+                is_active: true
+            }
+        });
+        return row;
     }
     /**
      * Remove member from team
      */
     async removeTeamMember(teamId, userId) {
-        const supabase = (0, db_1.getSupabase)();
-        const { error } = await supabase
-            .from('team_members')
-            .update({ is_active: false })
-            .eq('team_id', teamId)
-            .eq('user_id', userId);
-        if (error) {
-            throw new Error(`Failed to remove team member: ${error.message}`);
-        }
+        await this.prisma.teamMember.updateMany({
+            where: { team_id: teamId, user_id: userId },
+            data: { is_active: false }
+        });
     }
     /**
      * Update member role
      */
     async updateMemberRole(teamId, userId, role) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('team_members')
-            .update({ role })
-            .eq('team_id', teamId)
-            .eq('user_id', userId)
-            .eq('is_active', true)
-            .select()
-            .single();
-        if (error) {
-            throw new Error(`Failed to update member role: ${error.message}`);
-        }
-        return data;
+        await this.prisma.teamMember.updateMany({
+            where: { team_id: teamId, user_id: userId, is_active: true },
+            data: { role }
+        });
+        const updated = await this.prisma.teamMember.findFirst({
+            where: { team_id: teamId, user_id: userId, is_active: true }
+        });
+        if (!updated)
+            throw new Error('Member not found after role update');
+        return updated;
     }
     /**
      * Get team members
      */
     async getTeamMembers(teamId) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('team_members')
-            .select('*')
-            .eq('team_id', teamId)
-            .eq('is_active', true);
-        if (error) {
-            throw new Error(`Failed to fetch team members: ${error.message}`);
-        }
-        return data;
+        const rows = await this.prisma.teamMember.findMany({
+            where: { team_id: teamId, is_active: true }
+        });
+        return rows;
     }
     /**
      * Check if user has permission for resource
      */
     async checkPermission(teamId, userId, resourceType, resourceId, requiredPermission) {
-        const supabase = (0, db_1.getSupabase)();
-        // Check if user is team member
-        const { data: member } = await supabase
-            .from('team_members')
-            .select('role')
-            .eq('team_id', teamId)
-            .eq('user_id', userId)
-            .eq('is_active', true)
-            .single();
-        if (!member) {
+        // Check membership
+        const member = await this.prisma.teamMember.findFirst({
+            where: { team_id: teamId, user_id: userId, is_active: true },
+            select: { role: true }
+        });
+        if (!member)
             return false;
-        }
-        // Owners and admins have full access
-        if (member.role === 'owner' || member.role === 'admin') {
+        if (member.role === 'owner' || member.role === 'admin')
             return true;
+        // Check specific permission
+        const perm = await this.prisma.teamPermission.findUnique({
+            where: {
+                team_id_resource_type_resource_id: {
+                    team_id: teamId,
+                    resource_type: resourceType,
+                    resource_id: resourceId
+                }
+            },
+            select: { permission: true }
+        });
+        if (perm) {
+            return perm.permission === requiredPermission || perm.permission === 'admin';
         }
-        // Check specific permissions
-        const { data: permission } = await supabase
-            .from('team_permissions')
-            .select('permission')
-            .eq('team_id', teamId)
-            .eq('resource_type', resourceType)
-            .eq('resource_id', resourceId)
-            .single();
-        if (permission) {
-            return permission.permission === requiredPermission || permission.permission === 'admin';
-        }
-        // Default read access for members
         return requiredPermission === 'read';
     }
     /**
      * Grant permission to resource
      */
     async grantPermission(teamId, resourceType, resourceId, permission, grantedBy) {
-        const supabase = (0, db_1.getSupabase)();
-        const teamPermission = {
-            id: this.generateId(),
-            team_id: teamId,
-            resource_type: resourceType,
-            resource_id: resourceId,
-            permission,
-            granted_by: grantedBy,
-            granted_at: new Date()
-        };
-        const { data, error } = await supabase
-            .from('team_permissions')
-            .upsert(teamPermission)
-            .select()
-            .single();
-        if (error) {
-            throw new Error(`Failed to grant permission: ${error.message}`);
+        const now = new Date();
+        const row = await this.prisma.teamPermission.upsert({
+            where: {
+                team_id_resource_type_resource_id: {
+                    team_id: teamId,
+                    resource_type: resourceType,
+                    resource_id: resourceId
+                }
+            },
+            update: { permission, granted_by: grantedBy, granted_at: now },
+            create: {
+                team_id: teamId,
+                resource_type: resourceType,
+                resource_id: resourceId,
+                permission,
+                granted_by: grantedBy,
+                granted_at: now
+            }
+        });
+        return row;
+    }
+    /**
+     * List permissions for a team
+     */
+    async getTeamPermissions(teamId) {
+        const rows = await this.prisma.teamPermission.findMany({
+            where: { team_id: teamId }
+        });
+        return rows;
+    }
+    /**
+     * Update a specific permission by id (ensuring it belongs to team)
+     */
+    async updatePermission(teamId, permissionId, permission, grantedBy) {
+        const existing = await this.prisma.teamPermission.findUnique({ where: { id: permissionId } });
+        if (!existing || existing.team_id !== teamId) {
+            throw new Error('Permission not found for team');
         }
-        return data;
+        const updated = await this.prisma.teamPermission.update({
+            where: { id: permissionId },
+            data: { permission, granted_by: grantedBy, granted_at: new Date() }
+        });
+        return updated;
+    }
+    /**
+     * Remove a permission by id (ensuring it belongs to team)
+     */
+    async removePermission(teamId, permissionId) {
+        const existing = await this.prisma.teamPermission.findUnique({ where: { id: permissionId } });
+        if (!existing || existing.team_id !== teamId) {
+            throw new Error('Permission not found for team');
+        }
+        await this.prisma.teamPermission.delete({ where: { id: permissionId } });
     }
     /**
      * Generate unique ID

@@ -288,3 +288,29 @@ model TeamAnalytics {
 
   @@map("team_analytics")
 }
+
+// Personas content store (mirrors Supabase usage in db.ts)
+model Persona {
+  id            String   @id
+  country_key   String
+  displayName   String
+  locale_hint   String?
+  prompt_text   String
+  safe_reviewed Boolean  @default(false)
+  created_by    String?
+  created_at    DateTime @default(now())
+
+  @@map("personas")
+}
+
+// Minimal messages table (mirrors Supabase usage in db.ts)
+model Message {
+  id          String  @id
+  sender      String
+  text        String
+  country_key String?
+  timestamp   BigInt  @db.BigInt
+  status      String
+
+  @@map("messages")
+}

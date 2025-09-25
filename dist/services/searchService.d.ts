@@ -1,5 +1,6 @@
 import { Conversation } from '../models/conversation';
 export declare class SearchService {
+    private prisma;
     /**
      * Search conversations by title and content
      */

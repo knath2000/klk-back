@@ -1,7 +1,8 @@
-import { getSupabase } from './db';
 import { SubscriptionPlan } from '../models/conversation';
+import { PrismaClient } from '@prisma/client';
 
 export class SubscriptionService {
+  private prisma = new PrismaClient();
   private subscriptionPlans: SubscriptionPlan[] = [
     {
       id: 'free',
@@ -82,47 +83,42 @@ export class SubscriptionService {
    * Track message usage for user
    */
   async trackMessageUsage(userId: string, modelId: string, tokensUsed: number): Promise<void> {
-    const supabase = getSupabase();
-    
-    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-    
-    // Create or update usage log entry
-    const { error } = await supabase
-      .from('usage_logs')
-      .upsert({
+    const period = new Date().toISOString().slice(0, 7); // YYYY-MM
+    // Upsert on unique (user_id, model_id, period)
+    await this.prisma.usageLog.upsert({
+      where: {
+        user_id_model_id_period: {
+          user_id: userId,
+          model_id: modelId,
+          period
+        }
+      },
+      update: {
+        tokens_used: tokensUsed,
+        created_at: new Date()
+      },
+      create: {
         user_id: userId,
         model_id: modelId,
         tokens_used: tokensUsed,
-        period: currentMonth,
-        created_at: new Date().toISOString()
-      }, {
-        onConflict: 'user_id,model_id,period'
-      });
-
-    if (error) {
-      console.error('Failed to track message usage:', error);
-      throw error;
-    }
+        period,
+        created_at: new Date()
+      }
+    });
   }
 
   /**
    * Get user's usage for current period
    */
   async getUserUsage(userId: string, period: string = new Date().toISOString().slice(0, 7)): Promise<{ tokens_used: number } | null> {
-    const supabase = getSupabase();
-    
-    const { data, error } = await supabase
-      .from('usage_logs')
-      .select('tokens_used')
-      .eq('user_id', userId)
-      .eq('period', period)
-      .single();
-
-    if (error) {
-      return null;
-    }
-
-    return data;
+    // Sum tokens across all models for the given user and period
+    const logs = await this.prisma.usageLog.findMany({
+      where: { user_id: userId, period },
+      select: { tokens_used: true }
+    });
+    if (!logs || logs.length === 0) return { tokens_used: 0 };
+    const total = logs.reduce((sum, row) => sum + (row.tokens_used || 0), 0);
+    return { tokens_used: total };
   }
 
   /**
@@ -156,48 +152,35 @@ export class SubscriptionService {
    * Get user subscription
    */
   async getUserSubscription(userId: string): Promise<any> {
-    const supabase = getSupabase();
-    
-    const { data, error } = await supabase
-      .from('subscriptions')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
-
-    if (error) {
-      return null;
-    }
-
-    return data;
+    const sub = await this.prisma.subscription.findUnique({
+      where: { user_id: userId }
+    });
+    return sub ?? null;
   }
 
   /**
    * Create or update user subscription
    */
   async upsertUserSubscription(userId: string, planId: string): Promise<any> {
-    const supabase = getSupabase();
-    
-    const subscription = {
-      user_id: userId,
-      plan: planId,
-      status: 'active',
-      current_period_start: new Date().toISOString(),
-      current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
-      created_at: new Date().toISOString()
-    };
-
-    const { data, error } = await supabase
-      .from('subscriptions')
-      .upsert(subscription, { onConflict: 'user_id' })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Failed to upsert subscription:', error);
-      throw error;
-    }
-
-    return data;
+    const now = new Date();
+    const sub = await this.prisma.subscription.upsert({
+      where: { user_id: userId },
+      update: {
+        plan: planId,
+        status: 'active',
+        current_period_start: now,
+        current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      },
+      create: {
+        user_id: userId,
+        plan: planId,
+        status: 'active',
+        current_period_start: now,
+        current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        created_at: now
+      }
+    });
+    return sub;
   }
 }
 

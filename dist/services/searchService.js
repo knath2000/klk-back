@@ -1,114 +1,82 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.searchService = exports.SearchService = void 0;
-const db_1 = require("./db");
+const client_1 = require("@prisma/client");
 class SearchService {
+    constructor() {
+        this.prisma = new client_1.PrismaClient();
+    }
     /**
      * Search conversations by title and content
      */
     async searchConversations(userId, query) {
-        const supabase = (0, db_1.getSupabase)();
-        // Search conversation titles and metadata
-        const { data: conversations, error } = await supabase
-            .from('conversations')
-            .select(`
-        id,
-        user_id,
-        title,
-        model,
-        persona_id,
-        created_at,
-        updated_at,
-        message_count,
-        is_active
-      `)
-            .eq('user_id', userId)
-            .ilike('title', `%${query}%`)
-            .order('updated_at', { ascending: false })
-            .limit(50);
-        if (error) {
-            console.error('Search error:', error);
-            return [];
-        }
+        const conversations = await this.prisma.conversation.findMany({
+            where: {
+                user_id: userId,
+                OR: [
+                    { title: { contains: query, mode: 'insensitive' } },
+                    {
+                        messages: {
+                            some: { content: { contains: query, mode: 'insensitive' } }
+                        }
+                    }
+                ]
+            },
+            orderBy: { updated_at: 'desc' },
+            take: 50
+        });
         return conversations;
     }
     /**
      * Search conversation messages
      */
     async searchConversationMessages(userId, query) {
-        const supabase = (0, db_1.getSupabase)();
-        // Search through conversation messages
-        const { data: messages, error } = await supabase
-            .from('conversation_messages')
-            .select(`
-        id,
-        conversation_id,
-        content,
-        created_at
-      `)
-            .ilike('content', `%${query}%`)
-            .order('created_at', { ascending: false })
-            .limit(50);
-        if (error) {
-            console.error('Message search error:', error);
-            return [];
-        }
-        // Get conversation titles for context
-        if (messages.length > 0) {
-            const conversationIds = [...new Set(messages.map((m) => m.conversation_id))];
-            const { data: conversations } = await supabase
-                .from('conversations')
-                .select('id, title')
-                .in('id', conversationIds);
-            const conversationMap = new Map(conversations?.map((c) => [c.id, c.title]) || []);
-            return messages.map((message) => ({
-                ...message,
-                conversation_title: conversationMap.get(message.conversation_id) || 'Untitled Conversation'
-            }));
-        }
-        return messages;
+        // Find messages matching content
+        const messages = await this.prisma.conversationMessage.findMany({
+            where: { content: { contains: query, mode: 'insensitive' } },
+            orderBy: { created_at: 'desc' },
+            take: 50,
+            include: {
+                conversation: {
+                    select: { id: true, user_id: true, title: true }
+                }
+            }
+        });
+        // Filter by access (owner) since we don't join team permissions here
+        const filtered = messages.filter((m) => m.conversation?.user_id === userId);
+        return filtered.map((m) => ({
+            id: m.id,
+            conversation_id: m.conversation_id,
+            content: m.content,
+            created_at: m.created_at.toISOString(),
+            conversation_title: m.conversation?.title ?? 'Untitled Conversation'
+        }));
     }
     /**
      * Get recent conversations for user
      */
     async getRecentConversations(userId, limit = 10) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data: conversations, error } = await supabase
-            .from('conversations')
-            .select(`
-        id,
-        user_id,
-        title,
-        model,
-        persona_id,
-        created_at,
-        updated_at,
-        message_count,
-        is_active
-      `)
-            .eq('user_id', userId)
-            .order('updated_at', { ascending: false })
-            .limit(limit);
-        if (error) {
-            console.error('Recent conversations error:', error);
-            return [];
-        }
+        const conversations = await this.prisma.conversation.findMany({
+            where: { user_id: userId },
+            orderBy: { updated_at: 'desc' },
+            take: limit
+        });
         return conversations;
     }
     /**
      * Get conversation suggestions based on query
      */
     async getSuggestions(userId, query) {
-        const supabase = (0, db_1.getSupabase)();
-        // Get recent conversation titles for suggestions
-        const { data: conversations } = await supabase
-            .from('conversations')
-            .select('title')
-            .eq('user_id', userId)
-            .ilike('title', `%${query}%`)
-            .order('updated_at', { ascending: false })
-            .limit(5);
-        const titles = conversations?.map((c) => c.title) || [];
+        const conversations = await this.prisma.conversation.findMany({
+            where: {
+                user_id: userId,
+                title: { contains: query, mode: 'insensitive' }
+            },
+            select: { title: true },
+            orderBy: { updated_at: 'desc' },
+            take: 5
+        });
+        const titles = (conversations || []).map((c) => String(c.title));
         // Add common search terms based on user's conversation history
         const commonTerms = ['chat', 'discussion', 'meeting', 'project', 'idea', 'question'];
         const suggestions = [...new Set([...titles, ...commonTerms])];

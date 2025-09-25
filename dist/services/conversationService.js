@@ -1,7 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.conversationService = exports.ConversationService = void 0;
-const db_1 = require("./db");
 const client_1 = require("@prisma/client");
 // Initialize Prisma
 const prisma = new client_1.PrismaClient();
@@ -10,213 +9,189 @@ class ConversationService {
      * Create a new conversation
      */
     async createConversation(conversationData) {
-        const supabase = (0, db_1.getSupabase)();
-        const conversation = {
-            ...conversationData,
-            created_at: new Date(),
-            updated_at: new Date(),
-            message_count: 0,
-            is_active: true
-        };
-        const { data, error } = await supabase
-            .from('conversations')
-            .insert([conversation])
-            .select()
-            .single();
-        if (error) {
-            throw new Error(`Failed to create conversation: ${error.message}`);
-        }
-        return data;
+        const created = await prisma.conversation.create({
+            data: {
+                // Preserve client-provided id if present (existing API expects this)
+                id: conversationData.id,
+                user_id: conversationData.user_id,
+                title: conversationData.title,
+                model: conversationData.model,
+                persona_id: conversationData.persona_id ?? null,
+                // Prisma handles created_at default; we still explicitly set updated_at now()
+                updated_at: new Date(),
+                message_count: 0,
+                is_active: true
+            }
+        });
+        // Map Prisma model to our interface shape (identical field names)
+        return created;
     }
     /**
      * Get conversation by ID
      */
     async getConversation(id) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('conversations')
-            .select('*')
-            .eq('id', id)
-            .single();
-        if (error) {
-            return null;
-        }
-        return data;
+        const conv = await prisma.conversation.findUnique({
+            where: { id }
+        });
+        return conv;
     }
     /**
      * Get user's conversations
      */
     async getUserConversations(userId) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('conversations')
-            .select('*')
-            .eq('user_id', userId)
-            .order('updated_at', { ascending: false });
-        if (error) {
-            throw new Error(`Failed to fetch user conversations: ${error.message}`);
-        }
-        return data;
+        const rows = await prisma.conversation.findMany({
+            where: { user_id: userId },
+            orderBy: { updated_at: 'desc' }
+        });
+        return rows;
     }
     /**
      * Update conversation
      */
     async updateConversation(id, updateData) {
-        const supabase = (0, db_1.getSupabase)();
         const updateFields = { ...updateData };
-        if (updateData.updated_at === undefined) {
+        if (updateFields.updated_at === undefined) {
             updateFields.updated_at = new Date();
         }
-        const { data, error } = await supabase
-            .from('conversations')
-            .update(updateFields)
-            .eq('id', id)
-            .select()
-            .single();
-        if (error) {
-            throw new Error(`Failed to update conversation: ${error.message}`);
-        }
-        return data;
+        const updated = await prisma.conversation.update({
+            where: { id },
+            data: updateFields
+        });
+        return updated;
     }
     /**
      * Delete conversation
      */
     async deleteConversation(id) {
-        const supabase = (0, db_1.getSupabase)();
-        const { error } = await supabase
-            .from('conversations')
-            .delete()
-            .eq('id', id);
-        if (error) {
-            throw new Error(`Failed to delete conversation: ${error.message}`);
-        }
+        await prisma.conversation.delete({ where: { id } });
     }
     /**
      * Sync conversation metadata from client
      */
     async syncConversationMetadata(conversationId, metadata) {
-        const supabase = (0, db_1.getSupabase)();
-        const { error } = await supabase
-            .from('conversations')
-            .update({
-            title: metadata.title,
-            message_count: metadata.messageCount,
-            updated_at: metadata.lastMessageAt
-        })
-            .eq('id', conversationId);
-        if (error) {
-            throw new Error(`Failed to sync conversation metadata: ${error.message}`);
-        }
+        await prisma.conversation.update({
+            where: { id: conversationId },
+            data: {
+                title: metadata.title,
+                message_count: metadata.messageCount,
+                updated_at: metadata.lastMessageAt
+            }
+        });
     }
     /**
      * Add message to conversation (minimal server-side storage)
      */
     async addMessage(messageData) {
-        const supabase = (0, db_1.getSupabase)();
-        const message = {
-            id: this.generateId(),
-            ...messageData,
-            created_at: new Date()
-        };
-        const { data, error } = await supabase
-            .from('conversation_messages')
-            .insert([message])
-            .select()
-            .single();
-        if (error) {
-            throw new Error(`Failed to add message: ${error.message}`);
-        }
-        // Update conversation message count
-        await this.updateConversation(message.conversation_id, {
-            message_count: (await this.getMessageCount(message.conversation_id)) + 1,
-            updated_at: new Date()
+        const messageId = this.generateId();
+        const now = new Date();
+        // Create message and bump counts in a transaction
+        const created = await prisma.$transaction(async (tx) => {
+            const createdMsg = await tx.conversationMessage.create({
+                data: {
+                    id: messageId,
+                    conversation_id: messageData.conversation_id,
+                    role: messageData.role,
+                    content: messageData.content,
+                    model: messageData.model,
+                    persona_id: messageData.persona_id ?? null,
+                    tokens_used: messageData.tokens_used ?? null,
+                    created_at: now
+                }
+            });
+            const currentCount = await tx.conversationMessage.count({
+                where: { conversation_id: messageData.conversation_id }
+            });
+            await tx.conversation.update({
+                where: { id: messageData.conversation_id },
+                data: { message_count: currentCount, updated_at: now }
+            });
+            return createdMsg;
         });
-        return data;
+        return created;
     }
     /**
      * Get conversation messages
      */
     async getConversationMessages(conversationId) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('conversation_messages')
-            .select('*')
-            .eq('conversation_id', conversationId)
-            .order('created_at', { ascending: true });
-        if (error) {
-            throw new Error(`Failed to fetch conversation messages: ${error.message}`);
-        }
-        return data;
+        const rows = await prisma.conversationMessage.findMany({
+            where: { conversation_id: conversationId },
+            orderBy: { created_at: 'asc' }
+        });
+        return rows;
     }
     /**
      * Get message count for conversation
      */
     async getMessageCount(conversationId) {
-        const supabase = (0, db_1.getSupabase)();
-        const { count, error } = await supabase
-            .from('conversation_messages')
-            .select('*', { count: 'exact', head: true })
-            .eq('conversation_id', conversationId);
-        if (error) {
-            throw new Error(`Failed to get message count: ${error.message}`);
-        }
+        const count = await prisma.conversationMessage.count({
+            where: { conversation_id: conversationId }
+        });
         return count || 0;
     }
     /**
      * Switch model for conversation
      */
     async switchModel(conversationId, modelId, reason = 'user_choice') {
-        const supabase = (0, db_1.getSupabase)();
+        // Always construct a result we can return even if persistence is unavailable
         const modelSwitch = {
             conversation_id: conversationId,
             model_id: modelId,
             switched_at: new Date(),
             reason
         };
-        const { data, error } = await supabase
-            .from('conversation_models')
-            .insert([modelSwitch])
-            .select()
-            .single();
-        if (error) {
-            throw new Error(`Failed to switch model: ${error.message}`);
+        try {
+            const created = await prisma.$transaction(async (tx) => {
+                const createdSwitch = await tx.conversationModel.create({
+                    data: {
+                        conversation_id: conversationId,
+                        model_id: modelId,
+                        switched_at: modelSwitch.switched_at,
+                        reason
+                    }
+                });
+                await tx.conversation.update({
+                    where: { id: conversationId },
+                    data: { model: modelId }
+                });
+                return createdSwitch;
+            });
+            // Map to interface
+            return {
+                conversation_id: created.conversation_id,
+                model_id: created.model_id,
+                switched_at: created.switched_at,
+                reason: created.reason ?? undefined
+            };
         }
-        // Update conversation's current model
-        await this.updateConversation(conversationId, {
-            model: modelId
-        });
-        return data;
+        catch (e) {
+            // Graceful degradation: if Supabase is not configured or errors, skip persistence
+            console.warn('[conversationService.switchModel] DB unavailable; skipping persistence. Returning transient switch result.', e?.message || e);
+            return modelSwitch;
+        }
     }
     /**
      * Get current model for conversation (latest from model history or conversation model field)
      */
     async getCurrentModel(conversationId) {
-        const supabase = (0, db_1.getSupabase)();
-        // First, try to get the latest model switch from history
-        const { data: modelHistory, error: historyError } = await supabase
-            .from('conversation_models')
-            .select('model_id')
-            .eq('conversation_id', conversationId)
-            .order('switched_at', { ascending: false })
-            .limit(1)
-            .single();
-        if (historyError && historyError.code !== 'PGRST116') { // PGRST116 is "no rows returned"
-            throw new Error(`Failed to fetch model history: ${historyError.message}`);
+        try {
+            // Latest model switch takes precedence
+            const latest = await prisma.conversationModel.findFirst({
+                where: { conversation_id: conversationId },
+                orderBy: { switched_at: 'desc' },
+                select: { model_id: true }
+            });
+            if (latest?.model_id)
+                return latest.model_id;
+            // Fallback to conversation's current model
+            const conv = await prisma.conversation.findUnique({
+                where: { id: conversationId },
+                select: { model: true }
+            });
+            if (conv?.model)
+                return conv.model;
         }
-        if (modelHistory) {
-            return modelHistory.model_id;
-        }
-        // Fallback to conversation's model field
-        const { data: conversation, error: convError } = await supabase
-            .from('conversations')
-            .select('model')
-            .eq('id', conversationId)
-            .single();
-        if (convError) {
-            throw new Error(`Failed to fetch conversation model: ${convError.message}`);
-        }
-        if (conversation && conversation.model) {
-            return conversation.model;
+        catch (e) {
+            console.warn('[conversationService.getCurrentModel] DB unavailable; using default model.', e?.message || e);
         }
         // Final fallback to default
         return process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
@@ -225,35 +200,38 @@ class ConversationService {
      * Get conversation model history
      */
     async getConversationModelHistory(conversationId) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('conversation_models')
-            .select('*')
-            .eq('conversation_id', conversationId)
-            .order('switched_at', { ascending: false });
-        if (error) {
-            throw new Error(`Failed to fetch model history: ${error.message}`);
-        }
-        return data;
+        const rows = await prisma.conversationModel.findMany({
+            where: { conversation_id: conversationId },
+            orderBy: { switched_at: 'desc' }
+        });
+        return rows.map((r) => ({
+            conversation_id: r.conversation_id,
+            model_id: r.model_id,
+            switched_at: r.switched_at,
+            reason: r.reason ?? undefined
+        }));
     }
     /**
      * Search conversations
      */
     async searchConversations(userId, query) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('conversations')
-            .select(`
-        *,
-        conversation_messages(content)
-      `)
-            .eq('user_id', userId)
-            .or(`title.ilike.%${query}%,conversation_messages.content.ilike.%${query}%`)
-            .order('updated_at', { ascending: false });
-        if (error) {
-            throw new Error(`Failed to search conversations: ${error.message}`);
-        }
-        return data;
+        const rows = await prisma.conversation.findMany({
+            where: {
+                user_id: userId,
+                OR: [
+                    { title: { contains: query, mode: 'insensitive' } },
+                    {
+                        messages: {
+                            some: {
+                                content: { contains: query, mode: 'insensitive' }
+                            }
+                        }
+                    }
+                ]
+            },
+            orderBy: { updated_at: 'desc' }
+        });
+        return rows;
     }
     /**
      * Generate unique ID

@@ -14,19 +14,29 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
         this.activeRequests.set(requestId, controller);
         let response = null;
         try {
+            const body = {
+                model: options.model,
+                messages,
+                stream: true,
+                max_tokens: 1000,
+            };
+            if (typeof options.temperature === 'number') {
+                body.temperature = options.temperature;
+            }
+            // Prefer json_schema if provided, otherwise allow a raw response_format
+            if (options.jsonSchema) {
+                body.response_format = { type: 'json_schema', json_schema: options.jsonSchema };
+            }
+            else if (options.responseFormat) {
+                body.response_format = options.responseFormat;
+            }
             const response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    model: options.model,
-                    messages,
-                    stream: true,
-                    max_tokens: 1000,
-                    temperature: 0.7,
-                }),
+                body: JSON.stringify(body),
                 signal: controller.signal,
             });
             if (!response.ok) {
@@ -116,19 +126,28 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
         const requestId = options.requestId || `req_${Date.now()}`;
         this.activeRequests.set(requestId, controller);
         try {
+            const body = {
+                model: options.model,
+                messages,
+                stream: false,
+                max_tokens: 1000,
+            };
+            if (typeof options.temperature === 'number') {
+                body.temperature = options.temperature;
+            }
+            if (options.jsonSchema) {
+                body.response_format = { type: 'json_schema', json_schema: options.jsonSchema };
+            }
+            else if (options.responseFormat) {
+                body.response_format = options.responseFormat;
+            }
             const response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    model: options.model,
-                    messages,
-                    stream: false,
-                    max_tokens: 1000,
-                    temperature: 0.7,
-                }),
+                body: JSON.stringify(body),
                 signal: controller.signal,
             });
             if (!response.ok) {

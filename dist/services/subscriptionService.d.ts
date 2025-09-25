@@ -1,5 +1,6 @@
 import { SubscriptionPlan } from '../models/conversation';
 export declare class SubscriptionService {
+    private prisma;
     private subscriptionPlans;
     /**
      * Get all subscription plans

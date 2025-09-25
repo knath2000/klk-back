@@ -30,6 +30,9 @@ export interface LLMOptions {
     model: string;
     timeout?: number;
     requestId?: string;
+    temperature?: number;
+    responseFormat?: any;
+    jsonSchema?: any;
 }
 export interface UserMessagePayload {
     message: string;

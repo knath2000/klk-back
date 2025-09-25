@@ -307,17 +307,8 @@ router.get('/:id/permissions', async (req, res) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const supabase = (req as any).supabase || await import('../services/db').then(mod => mod.getSupabase());
-    const { data, error } = await supabase
-      .from('team_permissions')
-      .select('*')
-      .eq('team_id', req.params.id);
-
-    if (error) {
-      throw new Error(`Failed to fetch permissions: ${error.message}`);
-    }
-
-    res.json(data);
+    const permissions = await teamService.getTeamPermissions(req.params.id);
+    res.json(permissions);
   } catch (error) {
     console.error('Error fetching permissions:', error);
     res.status(500).json({ error: 'Failed to fetch permissions' });
@@ -352,20 +343,8 @@ router.put('/:id/permissions/:permissionId', async (req, res) => {
       return res.status(400).json({ error: 'Missing required field: permission' });
     }
 
-    const supabase = (req as any).supabase || await import('../services/db').then(mod => mod.getSupabase());
-    const { data, error } = await supabase
-      .from('team_permissions')
-      .update({ permission, granted_by: userId, granted_at: new Date() })
-      .eq('id', req.params.permissionId)
-      .eq('team_id', req.params.id)
-      .select()
-      .single();
-
-    if (error) {
-      throw new Error(`Failed to update permission: ${error.message}`);
-    }
-
-    res.json(data);
+    const updated = await teamService.updatePermission(req.params.id, req.params.permissionId, permission, userId);
+    res.json(updated);
   } catch (error) {
     console.error('Error updating permission:', error);
     res.status(500).json({ error: 'Failed to update permission' });
@@ -394,17 +373,7 @@ router.delete('/:id/permissions/:permissionId', async (req, res) => {
       return res.status(403).json({ error: 'Forbidden - only owners and admins can manage permissions' });
     }
 
-    const supabase = (req as any).supabase || await import('../services/db').then(mod => mod.getSupabase());
-    const { error } = await supabase
-      .from('team_permissions')
-      .delete()
-      .eq('id', req.params.permissionId)
-      .eq('team_id', req.params.id);
-
-    if (error) {
-      throw new Error(`Failed to remove permission: ${error.message}`);
-    }
-
+    await teamService.removePermission(req.params.id, req.params.permissionId);
     res.status(204).send();
   } catch (error) {
     console.error('Error removing permission:', error);

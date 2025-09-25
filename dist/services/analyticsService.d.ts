@@ -1,5 +1,6 @@
 import { ConversationAnalytics, UserAnalytics, TeamAnalytics } from '../models/analytics';
 export declare class AnalyticsService {
+    private prisma;
     /**
      * Track conversation analytics
      */

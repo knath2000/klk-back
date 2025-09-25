@@ -154,6 +154,8 @@ class WebSocketService {
                         conjugations: result.conjugations,
                         audio: result.audio,
                         related: result.related,
+                        // New: include SpanishDict-style entry for richer UI
+                        entry: result.entry,
                         timestamp: Date.now()
                     };
                     console.log('🔄 Data transformation complete:', {
@@ -165,8 +167,11 @@ class WebSocketService {
                     // Stream response (delta for partial, final for complete)
                     if (transport === 'websocket') {
                         // Stream deltas if websocket (implement true streaming with chunks)
-                        const firstDefinition = result.definitions[0]?.text || result.definitions[0]?.meaning || 'Translation completed';
-                        const chunks = firstDefinition.split(' '); // Simple word-based streaming
+                        const firstPreview = (result.definitions?.[0]?.text) ||
+                            (result.definitions?.[0]?.meaning) ||
+                            (result.entry?.senses?.[0]?.gloss) ||
+                            'Translation completed';
+                        const chunks = String(firstPreview).split(' '); // Simple word-based streaming
                         chunks.forEach((chunk, index) => {
                             setTimeout(() => {
                                 socket.emit('translation_delta', { chunk, index, total: chunks.length, id: frontendResult.id });
@@ -241,10 +246,35 @@ class WebSocketService {
                         { role: 'system', content: persona.prompt_text },
                         { role: 'user', content: data.message }
                     ];
+                    // Determine effective model with strict precedence:
+                    // 1) Payload model from client (explicit user selection)
+                    // 2) Per-conversation model from DB (if conversationId and DB available)
+                    // 3) Default env model
+                    let effectiveModel;
+                    if (data.model) {
+                        effectiveModel = data.model;
+                        console.log(`🧠 Using payload-selected model for request ${data.message_id}: ${effectiveModel}`);
+                    }
+                    else if (data.conversationId) {
+                        try {
+                            const dbModel = await conversationService_1.conversationService.getCurrentModel(data.conversationId);
+                            if (dbModel) {
+                                effectiveModel = dbModel;
+                                console.log(`📋 LOADED CONVERSATION MODEL from DB for ${data.conversationId}: ${effectiveModel}`);
+                            }
+                        }
+                        catch (dbError) {
+                            console.warn(`⚠️ FAILED TO LOAD CONVERSATION MODEL from DB, will use default: ${dbError?.message || dbError}`);
+                        }
+                    }
+                    if (!effectiveModel) {
+                        effectiveModel = process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+                        console.log(`🔁 Fallback to default model for request ${data.message_id}: ${effectiveModel}`);
+                    }
                     // Use OpenRouter for chat
                     const openRouterAdapter = new openrouterAdapter_1.OpenRouterAdapter(process.env.OPENROUTER_API_KEY || '', process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1');
                     const options = {
-                        model: process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
+                        model: effectiveModel,
                         timeout: 30000,
                         requestId: data.message_id
                     };

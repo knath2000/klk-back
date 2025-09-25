@@ -1,148 +1,121 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.analyticsService = exports.AnalyticsService = void 0;
-const db_1 = require("./db");
+const client_1 = require("@prisma/client");
 class AnalyticsService {
+    constructor() {
+        this.prisma = new client_1.PrismaClient();
+    }
     /**
      * Track conversation analytics
      */
     async trackConversationAnalytics(conversationId, userId, analyticsData) {
-        const supabase = (0, db_1.getSupabase)();
-        const conversationAnalytics = {
-            id: this.generateId(),
-            conversation_id: conversationId,
-            user_id: userId,
-            ...analyticsData,
-            created_at: new Date(),
-            updated_at: new Date()
-        };
-        const { data, error } = await supabase
-            .from('conversation_analytics')
-            .upsert(conversationAnalytics, { onConflict: 'conversation_id' })
-            .select()
-            .single();
-        if (error) {
-            throw new Error(`Failed to track conversation analytics: ${error.message}`);
-        }
-        return data;
+        const now = new Date();
+        const row = await this.prisma.conversationAnalytics.upsert({
+            where: { conversation_id: conversationId },
+            update: { ...analyticsData, updated_at: now },
+            create: {
+                conversation_id: conversationId,
+                user_id: userId,
+                ...analyticsData,
+                created_at: now,
+                updated_at: now
+            }
+        });
+        return row;
     }
     /**
      * Get conversation analytics
      */
     async getConversationAnalytics(conversationId) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('conversation_analytics')
-            .select('*')
-            .eq('conversation_id', conversationId)
-            .single();
-        if (error) {
-            return null;
-        }
-        return data;
+        const row = await this.prisma.conversationAnalytics.findUnique({
+            where: { conversation_id: conversationId }
+        });
+        return row ?? null;
     }
     /**
      * Track user analytics
      */
     async trackUserAnalytics(userId, analyticsData) {
-        const supabase = (0, db_1.getSupabase)();
-        const userAnalytics = {
-            user_id: userId,
-            ...analyticsData,
-            updated_at: new Date()
-        };
-        const { data, error } = await supabase
-            .from('user_analytics')
-            .upsert(userAnalytics, { onConflict: 'user_id' })
-            .select()
-            .single();
-        if (error) {
-            throw new Error(`Failed to track user analytics: ${error.message}`);
-        }
-        return data;
+        const now = new Date();
+        const row = await this.prisma.userAnalytics.upsert({
+            where: { user_id: userId },
+            update: { ...analyticsData, updated_at: now },
+            create: {
+                user_id: userId,
+                total_conversations: analyticsData?.total_conversations ?? 0,
+                total_messages: analyticsData?.total_messages ?? 0,
+                total_tokens: analyticsData?.total_tokens ?? 0,
+                avg_response_time: analyticsData?.avg_response_time ?? 0,
+                created_at: now,
+                updated_at: now
+            }
+        });
+        return row;
     }
     /**
      * Get user analytics
      */
     async getUserAnalytics(userId) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('user_analytics')
-            .select('*')
-            .eq('user_id', userId)
-            .single();
-        if (error) {
-            return null;
-        }
-        return data;
+        const row = await this.prisma.userAnalytics.findUnique({
+            where: { user_id: userId }
+        });
+        return row ?? null;
     }
     /**
      * Track team analytics
      */
     async trackTeamAnalytics(teamId, analyticsData) {
-        const supabase = (0, db_1.getSupabase)();
-        const teamAnalytics = {
-            team_id: teamId,
-            ...analyticsData,
-            updated_at: new Date()
-        };
-        const { data, error } = await supabase
-            .from('team_analytics')
-            .upsert(teamAnalytics, { onConflict: 'team_id' })
-            .select()
-            .single();
-        if (error) {
-            throw new Error(`Failed to track team analytics: ${error.message}`);
-        }
-        return data;
+        const now = new Date();
+        const row = await this.prisma.teamAnalytics.upsert({
+            where: { team_id: teamId },
+            update: { ...analyticsData, updated_at: now },
+            create: {
+                team_id: teamId,
+                total_conversations: analyticsData?.total_conversations ?? 0,
+                total_messages: analyticsData?.total_messages ?? 0,
+                token_usage: analyticsData?.total_tokens ?? 0,
+                created_at: now,
+                updated_at: now
+            }
+        });
+        return row;
     }
     /**
      * Get team analytics
      */
     async getTeamAnalytics(teamId) {
-        const supabase = (0, db_1.getSupabase)();
-        const { data, error } = await supabase
-            .from('team_analytics')
-            .select('*')
-            .eq('team_id', teamId)
-            .single();
-        if (error) {
-            return null;
-        }
-        return data;
+        const row = await this.prisma.teamAnalytics.findUnique({
+            where: { team_id: teamId }
+        });
+        return row ?? null;
     }
     /**
      * Get usage statistics for user
      */
     async getUserUsageStats(userId, period = '30d') {
-        const supabase = (0, db_1.getSupabase)();
         // Calculate date range
         const endDate = new Date();
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - parseInt(period.replace('d', '')));
-        // Get conversation count
-        const { data: conversations, error: convError } = await supabase
-            .from('conversations')
-            .select('id, created_at, message_count')
-            .eq('user_id', userId)
-            .gte('created_at', startDate.toISOString())
-            .lte('created_at', endDate.toISOString());
-        if (convError) {
-            throw new Error(`Failed to fetch conversation stats: ${convError.message}`);
-        }
+        const conversations = await this.prisma.conversation.findMany({
+            where: {
+                user_id: userId,
+                created_at: { gte: startDate, lte: endDate }
+            },
+            select: { id: true, created_at: true, message_count: true, model: true }
+        });
         // Get message count
         const totalConversations = conversations.length;
         const totalMessages = conversations.reduce((sum, conv) => sum + conv.message_count, 0);
-        // Get token usage
-        const { data: usage, error: usageError } = await supabase
-            .from('usage_logs')
-            .select('tokens_used')
-            .eq('user_id', userId)
-            .gte('created_at', startDate.toISOString().slice(0, 7) + '-01');
-        if (usageError) {
-            throw new Error(`Failed to fetch usage stats: ${usageError.message}`);
-        }
-        const totalTokens = usage ? usage.reduce((sum, log) => sum + log.tokens_used, 0) : 0;
+        const usage = await this.prisma.usageLog.findMany({
+            where: {
+                user_id: userId,
+                created_at: { gte: new Date(`${startDate.toISOString().slice(0, 7)}-01`) }
+            },
+            select: { tokens_used: true }
+        });
+        const totalTokens = usage.reduce((sum, log) => sum + log.tokens_used, 0);
         return {
             totalConversations,
             totalMessages,
@@ -154,37 +127,27 @@ class AnalyticsService {
      * Get team usage statistics
      */
     async getTeamUsageStats(teamId, period = '30d') {
-        const supabase = (0, db_1.getSupabase)();
         // Get team members
-        const { data: members, error: membersError } = await supabase
-            .from('team_members')
-            .select('user_id')
-            .eq('team_id', teamId)
-            .eq('is_active', true);
-        if (membersError) {
-            throw new Error(`Failed to fetch team members: ${membersError.message}`);
-        }
-        const userIds = members.map((m) => m.user_id);
+        const members = await this.prisma.teamMember.findMany({
+            where: { team_id: teamId, is_active: true },
+            select: { user_id: true }
+        });
         // Get team conversations
-        const { data: conversations, error: convError } = await supabase
-            .from('conversations')
-            .select('id, user_id, message_count')
-            .eq('team_id', teamId);
-        if (convError) {
-            throw new Error(`Failed to fetch team conversations: ${convError.message}`);
-        }
+        const conversations = await this.prisma.conversation.findMany({
+            where: { team_id: teamId },
+            select: { id: true, user_id: true, message_count: true }
+        });
+        const userIds = members.map((m) => m.user_id);
         const totalConversations = conversations.length;
         const totalMessages = conversations.reduce((sum, conv) => sum + conv.message_count, 0);
         // Get token usage for team members
         let totalTokens = 0;
         for (const userId of userIds) {
-            const { data: usage } = await supabase
-                .from('usage_logs')
-                .select('tokens_used')
-                .eq('user_id', userId);
-            if (usage) {
-                totalTokens += usage.reduce((sum, log) => sum + log.tokens_used, 0);
-            }
+            const usage = await this.prisma.usageLog.findMany({
+                where: { user_id: userId },
+                select: { tokens_used: true }
+            });
+            totalTokens += usage.reduce((sum, log) => sum + log.tokens_used, 0);
         }
         return {
             totalConversations,
@@ -197,34 +160,32 @@ class AnalyticsService {
      * Generate conversation insights report
      */
     async generateConversationInsights(userId, options = {}) {
-        const supabase = (0, db_1.getSupabase)();
         const limit = options.limit || 10;
         const startDate = options.startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
         const endDate = options.endDate || new Date().toISOString();
         // Get top conversations by message count
-        const { data: topConversations, error: convError } = await supabase
-            .from('conversations')
-            .select('*')
-            .eq('user_id', userId)
-            .gte('created_at', startDate)
-            .lte('created_at', endDate)
-            .order('message_count', { ascending: false })
-            .limit(limit);
-        if (convError) {
-            throw new Error(`Failed to fetch top conversations: ${convError.message}`);
-        }
+        const topConversations = await this.prisma.conversation.findMany({
+            where: {
+                user_id: userId,
+                created_at: { gte: new Date(startDate), lte: new Date(endDate) }
+            },
+            orderBy: { message_count: 'desc' },
+            take: limit
+        });
         // Get model usage distribution (simplified approach)
         const modelUsage = {};
         for (const conv of topConversations) {
             modelUsage[conv.model] = (modelUsage[conv.model] || 0) + 1;
         }
         // Get conversation analytics
-        const analyticsPromises = topConversations.map((conv) => this.getConversationAnalytics(conv.id));
-        const analytics = await Promise.all(analyticsPromises);
+        const analyticsRows = await this.prisma.conversationAnalytics.findMany({
+            where: { conversation_id: { in: topConversations.map((c) => c.id) } }
+        });
+        const analyticsByConv = new Map(analyticsRows.map((a) => [a.conversation_id, a]));
         return {
             topConversations: topConversations.map((conv, index) => ({
                 ...conv,
-                analytics: analytics[index]
+                analytics: analyticsByConv.get(conv.id) ?? null
             })),
             modelUsage,
             totalConversations: topConversations.length,
@@ -235,34 +196,27 @@ class AnalyticsService {
      * Generate team insights report
      */
     async generateTeamInsights(teamId, options = {}) {
-        const supabase = (0, db_1.getSupabase)();
         const limit = options.limit || 10;
         // Get team conversations
-        const { data: conversations, error: convError } = await supabase
-            .from('conversations')
-            .select('*')
-            .eq('team_id', teamId)
-            .order('updated_at', { ascending: false })
-            .limit(limit);
-        if (convError) {
-            throw new Error(`Failed to fetch team conversations: ${convError.message}`);
-        }
+        const conversations = await this.prisma.conversation.findMany({
+            where: { team_id: teamId },
+            orderBy: { updated_at: 'desc' },
+            take: limit
+        });
         // Get team members activity
-        const { data: members, error: membersError } = await supabase
-            .from('team_members')
-            .select('user_id')
-            .eq('team_id', teamId)
-            .eq('is_active', true);
-        if (membersError) {
-            throw new Error(`Failed to fetch team members: ${membersError.message}`);
-        }
+        const members = await this.prisma.teamMember.findMany({
+            where: { team_id: teamId, is_active: true },
+            select: { user_id: true }
+        });
         // Get conversation analytics for team conversations
-        const analyticsPromises = conversations.map((conv) => this.getConversationAnalytics(conv.id));
-        const analytics = await Promise.all(analyticsPromises);
+        const analytics = await this.prisma.conversationAnalytics.findMany({
+            where: { conversation_id: { in: conversations.map((c) => c.id) } }
+        });
+        const byConv = new Map(analytics.map(a => [a.conversation_id, a]));
         return {
             teamConversations: conversations.map((conv, index) => ({
                 ...conv,
-                analytics: analytics[index]
+                analytics: byConv.get(conv.id) ?? null
             })),
             teamMembers: members,
             totalConversations: conversations.length,
@@ -273,27 +227,22 @@ class AnalyticsService {
      * Generate export data for conversation
      */
     async generateConversationExport(conversationId, format) {
-        const supabase = (0, db_1.getSupabase)();
         // Get conversation details
-        const { data: conversation, error: convError } = await supabase
-            .from('conversations')
-            .select('*')
-            .eq('id', conversationId)
-            .single();
-        if (convError) {
-            throw new Error(`Failed to fetch conversation: ${convError.message}`);
+        const conversation = await this.prisma.conversation.findUnique({
+            where: { id: conversationId }
+        });
+        if (!conversation) {
+            throw new Error('Failed to fetch conversation');
         }
         // Get conversation messages
-        const { data: messages, error: msgError } = await supabase
-            .from('conversation_messages')
-            .select('*')
-            .eq('conversation_id', conversationId)
-            .order('created_at', { ascending: true });
-        if (msgError) {
-            throw new Error(`Failed to fetch conversation messages: ${msgError.message}`);
-        }
+        const messages = await this.prisma.conversationMessage.findMany({
+            where: { conversation_id: conversationId },
+            orderBy: { created_at: 'asc' }
+        });
         // Get conversation analytics
-        const analytics = await this.getConversationAnalytics(conversationId);
+        const analytics = await this.prisma.conversationAnalytics.findUnique({
+            where: { conversation_id: conversationId }
+        });
         const exportData = {
             conversation: {
                 id: conversation.id,
@@ -321,11 +270,11 @@ class AnalyticsService {
             // Convert to CSV format
             const csvHeaders = ['Role', 'Content', 'Model', 'Created At', 'Tokens Used'];
             const csvRows = messages.map((msg) => [
-                msg.role,
-                `"${msg.content.replace(/"/g, '""')}"`,
-                msg.model,
-                msg.created_at,
-                msg.tokens_used || ''
+                String(msg.role),
+                `"${String(msg.content).replace(/"/g, '""')}"`,
+                String(msg.model ?? ''),
+                String(msg.created_at ?? ''),
+                String(msg.tokens_used ?? '')
             ]);
             const csvContent = [csvHeaders.join(','), ...csvRows.map((row) => row.join(','))].join('\n');
             return csvContent;
@@ -340,41 +289,35 @@ class AnalyticsService {
      * Generate advanced analytics dashboard data
      */
     async generateAdvancedAnalytics(userId, options = {}) {
-        const supabase = (0, db_1.getSupabase)();
         const period = options.period || '30d';
         const endDate = new Date();
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - parseInt(period.replace('d', '')));
         let conversationsQuery;
         if (options.teamId) {
-            conversationsQuery = supabase
-                .from('conversations')
-                .select('*')
-                .eq('team_id', options.teamId)
-                .gte('created_at', startDate.toISOString())
-                .lte('created_at', endDate.toISOString());
+            conversationsQuery = this.prisma.conversation.findMany({
+                where: {
+                    team_id: options.teamId,
+                    created_at: { gte: startDate, lte: endDate }
+                }
+            });
         }
         else {
-            conversationsQuery = supabase
-                .from('conversations')
-                .select('*')
-                .eq('user_id', userId)
-                .gte('created_at', startDate.toISOString())
-                .lte('created_at', endDate.toISOString());
+            conversationsQuery = this.prisma.conversation.findMany({
+                where: {
+                    user_id: userId,
+                    created_at: { gte: startDate, lte: endDate }
+                }
+            });
         }
-        const { data: conversations, error: convError } = await conversationsQuery;
-        if (convError) {
-            throw new Error(`Failed to fetch conversations: ${convError.message}`);
-        }
+        const conversations = await conversationsQuery;
         // Get usage logs
-        const { data: usageLogs, error: usageError } = await supabase
-            .from('usage_logs')
-            .select('*')
-            .eq('user_id', userId)
-            .gte('created_at', startDate.toISOString().slice(0, 10));
-        if (usageError) {
-            throw new Error(`Failed to fetch usage logs: ${usageError.message}`);
-        }
+        const usageLogs = await this.prisma.usageLog.findMany({
+            where: {
+                user_id: userId,
+                created_at: { gte: new Date(startDate.toISOString().slice(0, 10)) }
+            }
+        });
         // Calculate metrics
         const totalConversations = conversations.length;
         const totalMessages = conversations.reduce((sum, conv) => sum + conv.message_count, 0);
@@ -392,7 +335,7 @@ class AnalyticsService {
         // Daily usage trends
         const dailyUsage = {};
         conversations.forEach((conv) => {
-            const date = (conv.created_at || '').split('T')[0];
+            const date = conv.created_at.split('T')[0];
             if (date) {
                 if (!dailyUsage[date]) {
                     dailyUsage[date] = { conversations: 0, messages: 0, tokens: 0 };
@@ -432,32 +375,26 @@ class AnalyticsService {
      * Get team analytics dashboard data
      */
     async getTeamAnalyticsDashboard(teamId, options = {}) {
-        const supabase = (0, db_1.getSupabase)();
         const period = options.period || '30d';
         const endDate = new Date();
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - parseInt(period.replace('d', '')));
         // Get team members
-        const { data: members, error: membersError } = await supabase
-            .from('team_members')
-            .select('user_id')
-            .eq('team_id', teamId)
-            .eq('is_active', true);
-        if (membersError) {
-            throw new Error(`Failed to fetch team members: ${membersError.message}`);
-        }
+        const members = await this.prisma.teamMember.findMany({
+            where: { team_id: teamId, is_active: true },
+            select: { user_id: true }
+        });
         // Get team conversations
-        const { data: conversations, error: convError } = await supabase
-            .from('conversations')
-            .select('*')
-            .eq('team_id', teamId)
-            .gte('created_at', startDate.toISOString())
-            .lte('created_at', endDate.toISOString());
-        if (convError) {
-            throw new Error(`Failed to fetch team conversations: ${convError.message}`);
-        }
+        const conversations = await this.prisma.conversation.findMany({
+            where: {
+                team_id: teamId,
+                created_at: { gte: startDate, lte: endDate }
+            }
+        });
         // Get team analytics
-        const teamAnalytics = await this.getTeamAnalytics(teamId);
+        const teamAnalytics = await this.prisma.teamAnalytics.findUnique({
+            where: { team_id: teamId }
+        });
         // Calculate team metrics
         const totalConversations = conversations.length;
         const totalMessages = conversations.reduce((sum, conv) => sum + conv.message_count, 0);

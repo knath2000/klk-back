@@ -1,6 +1,7 @@
 import { SharedConversation } from '../models/team';
 import { ConversationMessage } from '../models/conversation';
 export declare class CollaborationService {
+    private prisma;
     /**
      * Share conversation with user
      */
