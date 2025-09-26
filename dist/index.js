@@ -41,6 +41,7 @@ const http_1 = __importDefault(require("http"));
 const socket_io_1 = require("socket.io");
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
+const cookie_parser_1 = __importDefault(require("cookie-parser")); // Import cookie-parser
 // Import routes
 const conversations_1 = __importDefault(require("./routes/conversations"));
 const personas_1 = __importDefault(require("./routes/personas"));
@@ -51,7 +52,8 @@ const teams_1 = __importDefault(require("./routes/teams"));
 const analytics_1 = __importDefault(require("./routes/analytics"));
 const collaboration_1 = __importDefault(require("./routes/collaboration"));
 const translate_1 = __importDefault(require("./routes/translate"));
-const auth_1 = require("./middleware/auth");
+const auth_1 = __importDefault(require("./routes/auth"));
+const auth_2 = require("./middleware/auth");
 const websocket_1 = require("./services/websocket");
 dotenv_1.default.config();
 // Log environment variables for debugging
@@ -96,6 +98,8 @@ server.use((0, cors_1.default)({
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
+// Add cookie parser middleware
+server.use((0, cookie_parser_1.default)());
 // Add OPTIONS handler for preflight
 server.options('*', (0, cors_1.default)());
 server.use(express_1.default.json());
@@ -132,13 +136,15 @@ server.get('/api/test-openrouter', async (req, res) => {
     }
 });
 // Authenticated API routes (require valid Neon Auth JWT)
-server.use('/api/conversations', auth_1.neonAuthMiddleware, conversations_1.default);
-server.use('/api/subscription', auth_1.neonAuthMiddleware, subscription_1.default);
-server.use('/api/search', auth_1.neonAuthMiddleware, search_1.default);
-server.use('/api/teams', auth_1.neonAuthMiddleware, teams_1.default);
-server.use('/api/analytics', auth_1.neonAuthMiddleware, analytics_1.default);
-server.use('/api/collaboration', auth_1.neonAuthMiddleware, collaboration_1.default);
-server.use('/api/translate', auth_1.neonAuthMiddleware, translate_1.default);
+server.use('/api/conversations', auth_2.neonAuthMiddleware, conversations_1.default);
+server.use('/api/subscription', auth_2.neonAuthMiddleware, subscription_1.default);
+server.use('/api/search', auth_2.neonAuthMiddleware, search_1.default);
+server.use('/api/teams', auth_2.neonAuthMiddleware, teams_1.default);
+server.use('/api/analytics', auth_2.neonAuthMiddleware, analytics_1.default);
+server.use('/api/collaboration', auth_2.neonAuthMiddleware, collaboration_1.default);
+server.use('/api/translate', auth_2.neonAuthMiddleware, translate_1.default);
+// Public/Auth routes (Logout should be here)
+server.use('/api/auth', auth_1.default);
 // Optionally public (leave personas + models open, or secure later if needed)
 server.use('/api/personas', personas_1.default);
 server.use('/api/models', models_1.default);

@@ -4,6 +4,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import type { LLMMessage } from './types';
+import cookieParser from 'cookie-parser'; // Import cookie-parser
 
 // Import routes
 import conversationsRouter from './routes/conversations';
@@ -15,6 +16,7 @@ import teamsRouter from './routes/teams';
 import analyticsRouter from './routes/analytics';
 import collaborationRouter from './routes/collaboration';
 import translateRouter from './routes/translate';
+import authRouter from './routes/auth';
 
 // Import services
 import { getSupabase } from './services/db';
@@ -72,6 +74,9 @@ server.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
+// Add cookie parser middleware
+server.use(cookieParser());
+
 // Add OPTIONS handler for preflight
 server.options('*', cors());
 
@@ -121,6 +126,9 @@ server.use('/api/teams', neonAuthMiddleware, teamsRouter);
 server.use('/api/analytics', neonAuthMiddleware, analyticsRouter);
 server.use('/api/collaboration', neonAuthMiddleware, collaborationRouter);
 server.use('/api/translate', neonAuthMiddleware, translateRouter);
+
+// Public/Auth routes (Logout should be here)
+server.use('/api/auth', authRouter);
 
 // Optionally public (leave personas + models open, or secure later if needed)
 server.use('/api/personas', personasRouter);
