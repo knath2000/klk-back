@@ -21,6 +21,7 @@ declare class WebSocketService {
     broadcastToConversation(conversationId: string, event: string, data: any): void;
     sendToUser(userId: string, event: string, data: any): void;
     getActiveUsersInConversation(conversationId: string): string[];
+    private generateMessageId;
 }
 export declare function initializeWebSocket(io: Server): WebSocketService;
 export {};

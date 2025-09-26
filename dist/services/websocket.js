@@ -106,7 +106,7 @@ class WebSocketService {
             }
             // Add catch-all event handler for debugging unhandled events
             socket.onAny((event, ...args) => {
-                if (!['connect', 'disconnect', 'ping', 'pong', 'translation_request', 'user_message'].includes(event)) {
+                if (!['connect', 'disconnect', 'ping', 'pong', 'translation_request', 'user_message', 'load_history'].includes(event)) {
                     console.log('🔍 UNHANDLED EVENT:', event, 'from', socket.id, 'args:', args.length > 0 ? JSON.stringify(args[0]).substring(0, 200) : 'no args');
                 }
             });
@@ -241,7 +241,7 @@ class WebSocketService {
                     socket.emit('translation_error', { message: error.message || 'Translation failed' });
                 }
             });
-            // New user_message handler for chat messages
+            // Updated user_message handler with persistent storage for authenticated users
             socket.on('user_message', async (data) => {
                 // Update activity timestamp
                 this.updateActivity(socket.id);
@@ -278,15 +278,56 @@ class WebSocketService {
                         socket.emit('error', { message: 'Connection lost; please retry' });
                         return;
                     }
+                    // Extract authenticated user ID from Neon Stack Auth
+                    const userId = socket.user?.sub;
+                    if (!userId) {
+                        socket.emit('error', { message: 'Authentication required for chat history' });
+                        return;
+                    }
+                    // Determine conversation context
+                    let conversationId = data.conversationId;
+                    let isNewConversation = false;
+                    // If no conversationId, create a new one linked to authenticated user ID
+                    if (!conversationId) {
+                        const newConv = await conversationService_1.conversationService.createConversation({
+                            user_id: userId,
+                            title: data.message.substring(0, 50) + '...', // Initial title from first message
+                            model: data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
+                            persona_id: data.selected_country_key
+                        });
+                        conversationId = newConv.id;
+                        isNewConversation = true;
+                        console.log(`🆕 Created new conversation ${conversationId} for user ${userId}`);
+                    }
+                    // Verify user access to conversation
+                    const hasAccess = await collaborationService_1.collaborationService.hasAccessToConversation(conversationId, userId);
+                    if (!hasAccess) {
+                        socket.emit('error', { message: 'Access denied to conversation' });
+                        return;
+                    }
+                    // Store user message
+                    const userMessageId = data.message_id || this.generateMessageId();
+                    await conversationService_1.conversationService.addMessage({
+                        conversation_id: conversationId,
+                        role: 'user',
+                        content: data.message,
+                        model: data.model || '',
+                        persona_id: data.selected_country_key
+                    });
+                    console.log(`💾 Stored user message ${userMessageId} in conversation ${conversationId}`);
+                    // Emit user message confirmation to client
+                    socket.emit('user_message_stored', { message_id: userMessageId, conversationId });
                     // Fetch persona
                     const persona = await personaService_1.personaService.getPersona(data.selected_country_key);
                     if (!persona) {
                         socket.emit('error', { message: 'Invalid country selection' });
                         return;
                     }
-                    // Prepare LLM messages
+                    // Prepare LLM messages (include conversation history for context)
+                    const history = await conversationService_1.conversationService.getConversationMessages(conversationId);
                     const messages = [
                         { role: 'system', content: persona.prompt_text },
+                        ...history.map(msg => ({ role: msg.role, content: msg.content })).slice(-10), // Last 10 messages for context
                         { role: 'user', content: data.message }
                     ];
                     // Determine effective model with strict precedence:
@@ -298,12 +339,12 @@ class WebSocketService {
                         effectiveModel = data.model;
                         console.log(`🧠 Using payload-selected model for request ${data.message_id}: ${effectiveModel}`);
                     }
-                    else if (data.conversationId) {
+                    else if (conversationId) {
                         try {
-                            const dbModel = await conversationService_1.conversationService.getCurrentModel(data.conversationId);
+                            const dbModel = await conversationService_1.conversationService.getCurrentModel(conversationId);
                             if (dbModel) {
                                 effectiveModel = dbModel;
-                                console.log(`📋 LOADED CONVERSATION MODEL from DB for ${data.conversationId}: ${effectiveModel}`);
+                                console.log(`📋 LOADED CONVERSATION MODEL from DB for ${conversationId}: ${effectiveModel}`);
                             }
                         }
                         catch (dbError) {
@@ -324,23 +365,38 @@ class WebSocketService {
                     // Stream response
                     const stream = openRouterAdapter.streamCompletion(messages, options);
                     let fullContent = '';
+                    const assistantMessageId = this.generateMessageId();
                     for await (const chunk of stream) {
                         if (chunk.deltaText) {
                             fullContent += chunk.deltaText;
                             socket.emit('assistant_delta', {
-                                message_id: data.message_id,
+                                message_id: assistantMessageId,
                                 chunk: chunk.deltaText,
                                 index: fullContent.length,
                                 total: null // Unknown total for streaming
                             });
                         }
                     }
+                    // Store assistant message after streaming completes
+                    await conversationService_1.conversationService.addMessage({
+                        conversation_id: conversationId,
+                        role: 'assistant',
+                        content: fullContent,
+                        model: effectiveModel,
+                        persona_id: data.selected_country_key
+                    });
+                    console.log(`💾 Stored assistant message ${assistantMessageId} in conversation ${conversationId}`);
                     // Emit final message
                     socket.emit('assistant_final', {
-                        message_id: data.message_id,
+                        message_id: assistantMessageId,
                         final_content: fullContent,
-                        timestamp: new Date().toISOString()
+                        timestamp: new Date().toISOString(),
+                        conversationId
                     });
+                    // If new conversation, emit the created conversation ID back to client
+                    if (isNewConversation) {
+                        socket.emit('conversation_created', { conversationId, userId });
+                    }
                     // Metrics
                     this.metrics.successes.inc();
                     console.log('✅ User message processed for:', data.message_id, 'content length:', fullContent.length);
@@ -352,6 +408,36 @@ class WebSocketService {
                         message: 'Sorry, I encountered an error processing your message. Please try again.',
                         details: error.message
                     });
+                }
+            });
+            // Load conversation history
+            socket.on('load_history', async (data) => {
+                const { conversationId } = data;
+                const userId = socket.user?.sub;
+                if (!userId) {
+                    socket.emit('error', { message: 'Authentication required to load history' });
+                    return;
+                }
+                try {
+                    // Verify user access
+                    const hasAccess = await collaborationService_1.collaborationService.hasAccessToConversation(conversationId, userId);
+                    const conversation = await conversationService_1.conversationService.getConversation(conversationId);
+                    if (!hasAccess && (!conversation || conversation.user_id !== userId)) {
+                        socket.emit('error', { message: 'Access denied to conversation history' });
+                        return;
+                    }
+                    // Fetch messages
+                    const messages = await conversationService_1.conversationService.getConversationMessages(conversationId);
+                    socket.emit('history_loaded', {
+                        conversationId,
+                        messages: messages.slice(-50), // Last 50 for performance
+                        timestamp: new Date().toISOString()
+                    });
+                    console.log(`📚 Loaded ${messages.length} messages for user ${userId} in conversation ${conversationId}`);
+                }
+                catch (error) {
+                    console.error('Error loading history:', error);
+                    socket.emit('error', { message: 'Failed to load conversation history' });
                 }
             });
             // Add general error handler for connection issues
@@ -580,6 +666,9 @@ class WebSocketService {
     getActiveUsersInConversation(conversationId) {
         const room = this.conversationRooms.get(conversationId);
         return room ? Array.from(room) : [];
+    }
+    generateMessageId() {
+        return `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     }
 }
 // Neon/Stack Auth config for Socket.IO auth

@@ -8,16 +8,16 @@ export class ConversationService {
   /**
    * Create a new conversation
    */
-  async createConversation(conversationData: Omit<Conversation, 'created_at' | 'updated_at' | 'message_count' | 'is_active'>): Promise<Conversation> {
+  async createConversation(conversationData: { user_id: string; title?: string; model?: string; persona_id?: string; id?: string }): Promise<Conversation> {
     const created = await prisma.conversation.create({
       data: {
-        // Preserve client-provided id if present (existing API expects this)
-        id: (conversationData as any).id,
+        // Use provided id or let Prisma generate with @default(uuid())
+        id: conversationData.id,
         user_id: conversationData.user_id,
-        title: conversationData.title,
-        model: conversationData.model,
+        title: conversationData.title || '',
+        model: conversationData.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
         persona_id: conversationData.persona_id ?? null,
-        // Prisma handles created_at default; we still explicitly set updated_at now()
+        // Prisma handles created_at default; explicitly set updated_at
         updated_at: new Date(),
         message_count: 0,
         is_active: true
@@ -88,13 +88,11 @@ export class ConversationService {
    * Add message to conversation (minimal server-side storage)
    */
   async addMessage(messageData: Omit<ConversationMessage, 'id' | 'created_at'>): Promise<ConversationMessage> {
-    const messageId = this.generateId();
     const now = new Date();
     // Create message and bump counts in a transaction
     const created = await prisma.$transaction(async (tx) => {
       const createdMsg = await tx.conversationMessage.create({
         data: {
-          id: messageId,
           conversation_id: messageData.conversation_id,
           role: messageData.role,
           content: messageData.content,
@@ -249,13 +247,6 @@ export class ConversationService {
       orderBy: { updated_at: 'desc' }
     });
     return rows as unknown as Conversation[];
-  }
-
-  /**
-   * Generate unique ID
-   */
-  private generateId(): string {
-    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
   }
 }
 

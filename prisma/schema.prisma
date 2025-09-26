@@ -9,8 +9,8 @@ datasource db {
 
 // User management
 model User {
-  id            String    @id @default(uuid())
-  email         String    @unique
+  id            String    @id  // Set to JWT sub, no default
+  email         String?   @unique
   name          String?
   image         String?
   password_hash String?
@@ -136,6 +136,7 @@ model Conversation {
   // Analytics
   analytics ConversationAnalytics?
 
+  @@index([user_id])
   @@map("conversations")
 }
 
@@ -150,6 +151,7 @@ model ConversationMessage {
   tokens_used   Int?
   created_at    DateTime @default(now())
 
+  @@index([conversation_id])
   @@map("conversation_messages")
 }
 

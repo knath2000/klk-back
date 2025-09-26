@@ -11,13 +11,13 @@ class ConversationService {
     async createConversation(conversationData) {
         const created = await prisma.conversation.create({
             data: {
-                // Preserve client-provided id if present (existing API expects this)
+                // Use provided id or let Prisma generate with @default(uuid())
                 id: conversationData.id,
                 user_id: conversationData.user_id,
-                title: conversationData.title,
-                model: conversationData.model,
+                title: conversationData.title || '',
+                model: conversationData.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
                 persona_id: conversationData.persona_id ?? null,
-                // Prisma handles created_at default; we still explicitly set updated_at now()
+                // Prisma handles created_at default; explicitly set updated_at
                 updated_at: new Date(),
                 message_count: 0,
                 is_active: true
@@ -82,13 +82,11 @@ class ConversationService {
      * Add message to conversation (minimal server-side storage)
      */
     async addMessage(messageData) {
-        const messageId = this.generateId();
         const now = new Date();
         // Create message and bump counts in a transaction
         const created = await prisma.$transaction(async (tx) => {
             const createdMsg = await tx.conversationMessage.create({
                 data: {
-                    id: messageId,
                     conversation_id: messageData.conversation_id,
                     role: messageData.role,
                     content: messageData.content,
@@ -232,12 +230,6 @@ class ConversationService {
             orderBy: { updated_at: 'desc' }
         });
         return rows;
-    }
-    /**
-     * Generate unique ID
-     */
-    generateId() {
-        return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
     }
 }
 exports.ConversationService = ConversationService;

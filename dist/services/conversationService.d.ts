@@ -3,7 +3,13 @@ export declare class ConversationService {
     /**
      * Create a new conversation
      */
-    createConversation(conversationData: Omit<Conversation, 'created_at' | 'updated_at' | 'message_count' | 'is_active'>): Promise<Conversation>;
+    createConversation(conversationData: {
+        user_id: string;
+        title?: string;
+        model?: string;
+        persona_id?: string;
+        id?: string;
+    }): Promise<Conversation>;
     /**
      * Get conversation by ID
      */
@@ -56,10 +62,6 @@ export declare class ConversationService {
      * Search conversations
      */
     searchConversations(userId: string, query: string): Promise<Conversation[]>;
-    /**
-     * Generate unique ID
-     */
-    private generateId;
 }
 export declare const conversationService: ConversationService;
 //# sourceMappingURL=conversationService.d.ts.map
