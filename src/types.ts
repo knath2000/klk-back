@@ -1,4 +1,4 @@
-// Server-side types for the AI Chat App
+// Server-side types for the AI Chat Apps
 
 export interface Persona {
   id: string;
