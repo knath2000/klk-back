@@ -58,36 +58,53 @@ class WebSocketService {
     this.io.use(async (socket, next) => {
       try {
         const token = socket.handshake?.auth?.token as string | undefined;
+        console.log('🔐 [WebSocket Auth] Received handshake auth:', {
+          hasToken: !!token,
+          tokenLength: token?.length,
+          tokenPrefix: token?.substring(0, 20) + '...',
+          handshakeKeys: Object.keys(socket.handshake),
+          authKeys: socket.handshake?.auth ? Object.keys(socket.handshake.auth) : []
+        });
+
         if (!token) {
           if (WebSocketService.REQUIRE_AUTH) {
+            console.log('🔐 [WebSocket Auth] No token provided, REQUIRE_AUTH=true, rejecting');
             return next(new Error('Token required'));
           } else {
-            // Allow anonymous for now (until frontend starts sending tokens)
+            console.log('🔐 [WebSocket Auth] No token provided, REQUIRE_AUTH=false, allowing anonymous');
             return next();
           }
         }
         if (!WebSocketService.JWKS || !WebSocketService.EXPECTED_ISSUER) {
           if (WebSocketService.REQUIRE_AUTH) {
+            console.log('🔐 [WebSocket Auth] Auth not configured, REQUIRE_AUTH=true, rejecting');
             return next(new Error('Auth not configured'));
           } else {
+            console.log('🔐 [WebSocket Auth] Auth not configured, REQUIRE_AUTH=false, allowing anonymous');
             return next();
           }
         }
+        console.log('🔐 [WebSocket Auth] Attempting JWT verification...');
         const { payload } = await jwtVerify(token, WebSocketService.JWKS, {
           issuer: WebSocketService.EXPECTED_ISSUER,
           audience: WebSocketService.EXPECTED_AUD
         });
+        console.log('🔐 [WebSocket Auth] JWT verification successful, payload sub:', payload.sub);
         (socket as any).user = {
           sub: payload.sub,
           email: (payload as any).email,
           name: (payload as any).name,
           claims: payload
         };
+        console.log('🔐 [WebSocket Auth] User attached to socket:', (socket as any).user.sub);
         return next();
       } catch (err: any) {
+        console.error('🔐 [WebSocket Auth] Authentication failed:', err.message);
         if (WebSocketService.REQUIRE_AUTH) {
+          console.log('🔐 [WebSocket Auth] REQUIRE_AUTH=true, rejecting due to auth failure');
           return next(new Error('Invalid token'));
         }
+        console.log('🔐 [WebSocket Auth] REQUIRE_AUTH=false, allowing anonymous despite auth failure');
         // Soft-fail if not enforced
         return next();
       }
@@ -353,6 +370,7 @@ class WebSocketService {
           // Extract authenticated user ID from Neon Stack Auth (optional for unauth)
           const userId = (socket as any).user?.sub;
           console.log('[DEBUG] Extracted userId:', userId ? `${userId.slice(0, 8)}...` : 'none (anonymous)');
+          console.log('[DEBUG] Socket user object:', (socket as any).user);
           const isAuthenticated = !!userId;
 
           let conversationId = data.conversationId;
