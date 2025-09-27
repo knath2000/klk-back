@@ -13,6 +13,13 @@ interface WebSocketUser {
   rooms: Set<string>; // conversation IDs
 }
 
+// Define local DeltaChunk type for Promise typing
+interface LocalDeltaChunk {
+  deltaText?: string;
+  isFinal: boolean;
+  meta?: any;
+}
+
 class WebSocketService {
   private io: Server;
   private users: Map<string, WebSocketUser> = new Map();
@@ -286,8 +293,11 @@ class WebSocketService {
         }
       });
 
-      // Updated user_message handler with persistent storage for authenticated users
+      // Updated user_message handler with granular logging for debugging hangs
       socket.on('user_message', async (data: UserMessagePayload) => {
+        const startTime = Date.now();
+        console.log(`[DEBUG] user_message handler started at ${new Date(startTime).toISOString()}`);
+
         // Update activity timestamp
         this.updateActivity(socket.id);
 
@@ -304,6 +314,7 @@ class WebSocketService {
         }
         const currentLimit = this.rateLimitMap.get(userKey)!;
         if (currentLimit.count >= 5) { // 5 messages per minute for chat
+          console.log('[DEBUG] Rate limit exceeded');
           socket.emit('error', { message: 'Rate limit exceeded. Please wait.' });
           return;
         }
@@ -313,36 +324,46 @@ class WebSocketService {
         this.metrics.requests.inc();
 
         try {
+          console.log('[DEBUG] Starting validation checks');
+
           if (!data.message.trim()) {
+            console.log('[DEBUG] Validation failed: empty message');
             socket.emit('error', { message: 'Message cannot be empty' });
             return;
           }
 
           if (!data.selected_country_key) {
+            console.log('[DEBUG] Validation failed: no country selected');
             socket.emit('error', { message: 'Please select a country first' });
             return;
           }
 
           // Validate connection
           if (!socket.connected) {
-            console.warn('user_message from disconnected socket:', socket.id);
+            console.warn('[DEBUG] Validation failed: socket not connected');
             socket.emit('error', { message: 'Connection lost; please retry' });
             return;
           }
 
+          console.log('[DEBUG] Validation checks passed');
+
           // Extract authenticated user ID from Neon Stack Auth
           const userId = (socket as any).user?.sub;
+          console.log('[DEBUG] Extracted userId:', userId ? `${userId.slice(0, 8)}...` : 'none');
           if (!userId) {
+            console.log('[DEBUG] No authenticated userId');
             socket.emit('error', { message: 'Authentication required for chat history' });
             return;
           }
 
-          // Determine conversation context
+          console.log('[DEBUG] User authenticated, proceeding');
+
           let conversationId = data.conversationId;
           let isNewConversation = false;
 
-          // If no conversationId, create a new one linked to authenticated user ID
+          // If no conversationId, create a new one linked to the authenticated user
           if (!conversationId) {
+            console.log('[DEBUG] No conversationId, creating new one');
             const newConv = await conversationService.createConversation({
               user_id: userId,
               title: data.message.substring(0, 50) + '...', // Initial title from first message
@@ -351,49 +372,75 @@ class WebSocketService {
             });
             conversationId = newConv.id;
             isNewConversation = true;
-            console.log(`🆕 Created new conversation ${conversationId} for user ${userId}`);
+            console.log(`[DEBUG] Created new conversation ${conversationId} for user ${userId}`);
+          } else {
+            console.log('[DEBUG] Using existing conversationId:', conversationId);
           }
 
+          console.log('[DEBUG] Conversation ID resolved:', conversationId);
+
           // Verify user access to conversation
+          console.log('[DEBUG] Verifying user access to conversation');
           const hasAccess = await collaborationService.hasAccessToConversation(conversationId, userId);
-          if (!hasAccess) {
+          const conversation = await conversationService.getConversation(conversationId);
+          if (!hasAccess && (!conversation || conversation.user_id !== userId)) {
+            console.log('[DEBUG] Access denied');
             socket.emit('error', { message: 'Access denied to conversation' });
             return;
           }
+          console.log('[DEBUG] User access verified');
 
-          // Store user message
+          // Store user message (no id in payload, let Prisma generate)
+          console.log('[DEBUG] Storing user message');
           const userMessageId = data.message_id || this.generateMessageId();
           await conversationService.addMessage({
             conversation_id: conversationId,
             role: 'user',
             content: data.message,
             model: data.model || '',
-            persona_id: data.selected_country_key
+            persona_id: data.selected_country_key,
+            tokens_used: undefined
           });
-          console.log(`💾 Stored user message ${userMessageId} in conversation ${conversationId}`);
+          console.log(`[DEBUG] Stored user message ${userMessageId} in conversation ${conversationId}`);
 
           // Emit user message confirmation to client
           socket.emit('user_message_stored', { message_id: userMessageId, conversationId });
 
           // Fetch persona
+          console.log('[DEBUG] Fetching persona');
           const persona = await personaService.getPersona(data.selected_country_key);
           if (!persona) {
+            console.error('[DEBUG] No persona found');
             socket.emit('error', { message: 'Invalid country selection' });
             return;
           }
+          console.log('[DEBUG] Persona fetched successfully');
 
           // Prepare LLM messages (include conversation history for context)
+          console.log('[DEBUG] Fetching conversation history');
           const history = await conversationService.getConversationMessages(conversationId);
+          console.log(`[DEBUG] Fetched ${history.length} history messages`);
           const messages: LLMMessage[] = [
             { role: 'system', content: persona.prompt_text },
             ...history.map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })).slice(-10), // Last 10 messages for context
             { role: 'user', content: data.message }
           ];
+
+          console.log('[DEBUG] LLM messages prepared, length:', messages.length);
+
+          // Log before OpenRouter call
+          console.log('[OpenRouter] Preparing to call streamCompletion');
+          console.log('[OpenRouter] API key present:', !!process.env.OPENROUTER_API_KEY ? `${process.env.OPENROUTER_API_KEY?.slice(0, 10)}...` : 'NO KEY');
+         
+          // Check for API key before proceeding
+          if (!process.env.OPENROUTER_API_KEY) {
+            const errorMsg = 'OpenRouter API key not configured';
+            console.error(`[OpenRouter] ${errorMsg}`);
+            socket.emit('llm_error', { message: errorMsg });
+            return;
+          }
           
-          // Determine effective model with strict precedence:
-          // 1) Payload model from client (explicit user selection)
-          // 2) Per-conversation model from DB (if conversationId and DB available)
-          // 3) Default env model
+          // Determine effective model with strict precedence
           let effectiveModel: string | undefined;
           if (data.model) {
             effectiveModel = data.model;
@@ -409,10 +456,14 @@ class WebSocketService {
               console.warn(`⚠️ FAILED TO LOAD CONVERSATION MODEL from DB, will use default: ${dbError?.message || dbError}`);
             }
           }
+          console.log('[OpenRouter] Model:', effectiveModel, 'Messages length:', messages.length);
+          
           if (!effectiveModel) {
             effectiveModel = process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
             console.log(`🔁 Fallback to default model for request ${data.message_id}: ${effectiveModel}`);
           }
+
+          console.log('[DEBUG] Model determined, calling OpenRouter');
 
           // Use OpenRouter for chat
           const openRouterAdapter = new OpenRouterAdapter(
@@ -426,32 +477,57 @@ class WebSocketService {
             requestId: data.message_id
           };
 
-          // Stream response
-          const stream = openRouterAdapter.streamCompletion(messages, options);
-          let fullContent = '';
-          const assistantMessageId = this.generateMessageId();
+          // Stream response with timeout wrapper
+          const streamPromise = (async () => {
+            const stream = openRouterAdapter.streamCompletion(messages, options);
+            let fullContent = '';
+            const assistantMessageId = this.generateMessageId();
 
-          for await (const chunk of stream) {
-            if (chunk.deltaText) {
-              fullContent += chunk.deltaText;
-              socket.emit('assistant_delta', {
-                message_id: assistantMessageId,
-                chunk: chunk.deltaText,
-                index: fullContent.length,
-                total: null // Unknown total for streaming
-              });
+            // Timeout for no chunks after 30s
+            const timeoutPromise = new Promise<LocalDeltaChunk>((_, reject) => {
+              setTimeout(() => reject(new Error('No response chunks received within 30s')), 30000);
+            });
+
+            try {
+              for await (const chunk of stream) {
+                if (chunk.deltaText) {
+                  fullContent += chunk.deltaText;
+                  socket.emit('assistant_delta', {
+                    message_id: assistantMessageId,
+                    chunk: chunk.deltaText,
+                    index: fullContent.length,
+                    total: null // Unknown total for streaming
+                  });
+                }
+              }
+              return { fullContent, assistantMessageId };
+            } catch (streamError) {
+              console.error('[OpenRouter] Stream error:', streamError);
+              socket.emit('llm_error', { message: 'LLM stream failed: ' + (streamError as Error).message });
+              throw streamError;
             }
-          }
+          })();
 
-          // Store assistant message after streaming completes
+          const { fullContent, assistantMessageId } = await Promise.race([
+            streamPromise,
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Stream timeout')), 60000)) // Overall 60s timeout
+          ]);
+
+          console.log('[DEBUG] OpenRouter call completed');
+
+          // Log after OpenRouter call
+          console.log('[OpenRouter] streamCompletion completed, full content length:', fullContent.length);
+
+          // Store assistant message after streaming completes (no id in payload)
           await conversationService.addMessage({
             conversation_id: conversationId,
             role: 'assistant',
             content: fullContent,
             model: effectiveModel,
-            persona_id: data.selected_country_key
+            persona_id: data.selected_country_key,
+            tokens_used: undefined
           });
-          console.log(`💾 Stored assistant message ${assistantMessageId} in conversation ${conversationId}`);
+          console.log(`[DEBUG] Stored assistant message ${assistantMessageId} in conversation ${conversationId}`);
 
           // Emit final message
           socket.emit('assistant_final', {
@@ -466,10 +542,14 @@ class WebSocketService {
             socket.emit('conversation_created', { conversationId, userId });
           }
 
+          console.log(`[DEBUG] Handler completed at ${new Date().toISOString()}, total time: ${Date.now() - startTime}ms`);
+
           // Metrics
           this.metrics.successes.inc();
           console.log('✅ User message processed for:', data.message_id, 'content length:', fullContent.length);
         } catch (error: any) {
+          const endTime = Date.now();
+          console.error(`[DEBUG] Handler error at ${new Date(endTime).toISOString()}, total time: ${endTime - startTime}ms`);
           console.error('❌ User message processing error:', error);
           this.metrics.errors.inc();
           socket.emit('error', {
