@@ -1,11 +1,14 @@
-import { Server, Socket } from 'socket.io';
-import { LLMMessage, LLMOptions, UserMessagePayload } from '../types';
-import { OpenRouterAdapter } from './openrouterAdapter';
+import {
+  Server,
+  Socket,
+} from 'socket.io';
+import { jwtVerify, createRemoteJWKSet } from 'jose';
+import { conversationService } from './conversationService';
 import { personaService } from './personaService';
 import { collaborationService } from './collaborationService';
-import { conversationService } from './conversationService';
 import { translationService } from './translationService';
-import { jwtVerify, createRemoteJWKSet } from 'jose';
+import { OpenRouterAdapter } from './openrouterAdapter';
+import { LLMMessage, LLMOptions, DeltaChunk, UserMessagePayload } from '../types';
 
 interface WebSocketUser {
   userId: string;
@@ -293,7 +296,7 @@ class WebSocketService {
         }
       });
 
-      // Updated user_message handler with granular logging for debugging hangs
+      // Updated user_message handler with optional auth for non-logged-in users
       socket.on('user_message', async (data: UserMessagePayload) => {
         const startTime = Date.now();
         console.log(`[DEBUG] user_message handler started at ${new Date(startTime).toISOString()}`);
@@ -347,66 +350,73 @@ class WebSocketService {
 
           console.log('[DEBUG] Validation checks passed');
 
-          // Extract authenticated user ID from Neon Stack Auth
+          // Extract authenticated user ID from Neon Stack Auth (optional for unauth)
           const userId = (socket as any).user?.sub;
-          console.log('[DEBUG] Extracted userId:', userId ? `${userId.slice(0, 8)}...` : 'none');
-          if (!userId) {
-            console.log('[DEBUG] No authenticated userId');
-            socket.emit('error', { message: 'Authentication required for chat history' });
-            return;
-          }
-
-          console.log('[DEBUG] User authenticated, proceeding');
+          console.log('[DEBUG] Extracted userId:', userId ? `${userId.slice(0, 8)}...` : 'none (anonymous)');
+          const isAuthenticated = !!userId;
 
           let conversationId = data.conversationId;
           let isNewConversation = false;
+          let tempConversationId = null;
 
-          // If no conversationId, create a new one linked to the authenticated user
-          if (!conversationId) {
-            console.log('[DEBUG] No conversationId, creating new one');
-            const newConv = await conversationService.createConversation({
-              user_id: userId,
-              title: data.message.substring(0, 50) + '...', // Initial title from first message
-              model: data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
-              persona_id: data.selected_country_key
+          if (isAuthenticated) {
+            // For authenticated users, use persistent conversation
+            if (!conversationId) {
+              console.log('[DEBUG] No conversationId, creating new one for authenticated user');
+              const newConv = await conversationService.createConversation({
+                user_id: userId,
+                title: data.message.substring(0, 50) + '...', // Initial title from first message
+                model: data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
+                persona_id: data.selected_country_key
+              });
+              conversationId = newConv.id;
+              isNewConversation = true;
+              console.log(`🆕 Created new conversation ${conversationId} for user ${userId}`);
+            } else {
+              console.log('[DEBUG] Using existing conversationId:', conversationId);
+            }
+
+            // Verify user access to conversation
+            console.log('[DEBUG] Verifying user access to conversation');
+            const hasAccess = await collaborationService.hasAccessToConversation(conversationId, userId);
+            const conversation = await conversationService.getConversation(conversationId);
+            if (!hasAccess && (!conversation || conversation.user_id !== userId)) {
+              console.log('[DEBUG] Access denied');
+              socket.emit('error', { message: 'Access denied to conversation' });
+              return;
+            }
+            console.log('[DEBUG] User access verified');
+
+            // Store user message
+            console.log('[DEBUG] Storing user message');
+            const userMessageId = data.message_id || this.generateMessageId();
+            await conversationService.addMessage({
+              conversation_id: conversationId,
+              role: 'user',
+              content: data.message,
+              model: data.model || '',
+                persona_id: data.selected_country_key,
+                tokens_used: undefined
             });
-            conversationId = newConv.id;
-            isNewConversation = true;
-            console.log(`[DEBUG] Created new conversation ${conversationId} for user ${userId}`);
+            console.log(`💾 Stored user message ${userMessageId} in conversation ${conversationId}`);
+
+            // Emit user message confirmation to client
+            socket.emit('user_message_stored', { message_id: userMessageId, conversationId });
           } else {
-            console.log('[DEBUG] Using existing conversationId:', conversationId);
+            // For unauthenticated users, use temporary conversation ID, skip DB
+            console.log('[DEBUG] Unauthenticated user, using temporary conversation');
+            if (!conversationId) {
+              tempConversationId = `temp-conv-${socket.id}-${Date.now()}`;
+              conversationId = tempConversationId;
+              isNewConversation = true;
+              console.log(`🆕 Created temporary conversation ${conversationId} for anonymous user`);
+            }
+            // No DB storage for unauth
           }
 
           console.log('[DEBUG] Conversation ID resolved:', conversationId);
 
-          // Verify user access to conversation
-          console.log('[DEBUG] Verifying user access to conversation');
-          const hasAccess = await collaborationService.hasAccessToConversation(conversationId, userId);
-          const conversation = await conversationService.getConversation(conversationId);
-          if (!hasAccess && (!conversation || conversation.user_id !== userId)) {
-            console.log('[DEBUG] Access denied');
-            socket.emit('error', { message: 'Access denied to conversation' });
-            return;
-          }
-          console.log('[DEBUG] User access verified');
-
-          // Store user message (no id in payload, let Prisma generate)
-          console.log('[DEBUG] Storing user message');
-          const userMessageId = data.message_id || this.generateMessageId();
-          await conversationService.addMessage({
-            conversation_id: conversationId,
-            role: 'user',
-            content: data.message,
-            model: data.model || '',
-            persona_id: data.selected_country_key,
-            tokens_used: undefined
-          });
-          console.log(`[DEBUG] Stored user message ${userMessageId} in conversation ${conversationId}`);
-
-          // Emit user message confirmation to client
-          socket.emit('user_message_stored', { message_id: userMessageId, conversationId });
-
-          // Fetch persona
+          // Fetch persona (common for both auth/unauth)
           console.log('[DEBUG] Fetching persona');
           const persona = await personaService.getPersona(data.selected_country_key);
           if (!persona) {
@@ -416,36 +426,38 @@ class WebSocketService {
           }
           console.log('[DEBUG] Persona fetched successfully');
 
-          // Prepare LLM messages (include conversation history for context)
-          console.log('[DEBUG] Fetching conversation history');
-          const history = await conversationService.getConversationMessages(conversationId);
-          console.log(`[DEBUG] Fetched ${history.length} history messages`);
-          const messages: LLMMessage[] = [
-            { role: 'system', content: persona.prompt_text },
-            ...history.map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })).slice(-10), // Last 10 messages for context
-            { role: 'user', content: data.message }
-          ];
+          // Prepare LLM messages (include conversation history for context if authenticated)
+          let messages: LLMMessage[];
+          if (isAuthenticated) {
+            console.log('[DEBUG] Fetching conversation history');
+            const history = await conversationService.getConversationMessages(conversationId);
+            console.log(`[DEBUG] Fetched ${history.length} history messages`);
+            messages = [
+              { role: 'system', content: persona.prompt_text },
+              ...history.map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })).slice(-10), // Last 10 messages for context
+              { role: 'user', content: data.message }
+            ];
+          } else {
+            // For unauth, no history, just system + current message
+            messages = [
+              { role: 'system', content: persona.prompt_text },
+              { role: 'user', content: data.message }
+            ];
+            console.log('[DEBUG] Unauthenticated, no history included in LLM request');
+          }
 
           console.log('[DEBUG] LLM messages prepared, length:', messages.length);
 
           // Log before OpenRouter call
           console.log('[OpenRouter] Preparing to call streamCompletion');
           console.log('[OpenRouter] API key present:', !!process.env.OPENROUTER_API_KEY ? `${process.env.OPENROUTER_API_KEY?.slice(0, 10)}...` : 'NO KEY');
-         
-          // Check for API key before proceeding
-          if (!process.env.OPENROUTER_API_KEY) {
-            const errorMsg = 'OpenRouter API key not configured';
-            console.error(`[OpenRouter] ${errorMsg}`);
-            socket.emit('llm_error', { message: errorMsg });
-            return;
-          }
-          
+
           // Determine effective model with strict precedence
           let effectiveModel: string | undefined;
           if (data.model) {
             effectiveModel = data.model;
             console.log(`🧠 Using payload-selected model for request ${data.message_id}: ${effectiveModel}`);
-          } else if (conversationId) {
+          } else if (isAuthenticated && conversationId) {
             try {
               const dbModel = await conversationService.getCurrentModel(conversationId);
               if (dbModel) {
@@ -456,14 +468,20 @@ class WebSocketService {
               console.warn(`⚠️ FAILED TO LOAD CONVERSATION MODEL from DB, will use default: ${dbError?.message || dbError}`);
             }
           }
-          console.log('[OpenRouter] Model:', effectiveModel, 'Messages length:', messages.length);
-          
           if (!effectiveModel) {
             effectiveModel = process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
             console.log(`🔁 Fallback to default model for request ${data.message_id}: ${effectiveModel}`);
           }
 
-          console.log('[DEBUG] Model determined, calling OpenRouter');
+          console.log('[OpenRouter] Model:', effectiveModel, 'Messages length:', messages.length);
+
+          // Check for API key before proceeding
+          if (!process.env.OPENROUTER_API_KEY) {
+            const errorMsg = 'OpenRouter API key not configured';
+            console.error(`[OpenRouter] ${errorMsg}`);
+            socket.emit('llm_error', { message: errorMsg });
+            return;
+          }
 
           // Use OpenRouter for chat
           const openRouterAdapter = new OpenRouterAdapter(
@@ -484,7 +502,7 @@ class WebSocketService {
             const assistantMessageId = this.generateMessageId();
 
             // Timeout for no chunks after 30s
-            const timeoutPromise = new Promise<LocalDeltaChunk>((_, reject) => {
+            const timeoutPromise = new Promise<DeltaChunk>((_, reject) => {
               setTimeout(() => reject(new Error('No response chunks received within 30s')), 30000);
             });
 
@@ -518,16 +536,20 @@ class WebSocketService {
           // Log after OpenRouter call
           console.log('[OpenRouter] streamCompletion completed, full content length:', fullContent.length);
 
-          // Store assistant message after streaming completes (no id in payload)
-          await conversationService.addMessage({
-            conversation_id: conversationId,
-            role: 'assistant',
-            content: fullContent,
-            model: effectiveModel,
-            persona_id: data.selected_country_key,
-            tokens_used: undefined
-          });
-          console.log(`[DEBUG] Stored assistant message ${assistantMessageId} in conversation ${conversationId}`);
+          // Store assistant message if authenticated
+          if (isAuthenticated) {
+            await conversationService.addMessage({
+              conversation_id: conversationId,
+              role: 'assistant',
+              content: fullContent,
+              model: effectiveModel,
+              persona_id: data.selected_country_key,
+              tokens_used: undefined
+            });
+            console.log(`💾 Stored assistant message ${assistantMessageId} in conversation ${conversationId}`);
+          } else {
+            console.log('[DEBUG] Unauthenticated, skipping assistant message storage');
+          }
 
           // Emit final message
           socket.emit('assistant_final', {
@@ -537,9 +559,9 @@ class WebSocketService {
             conversationId
           });
 
-          // If new conversation, emit the created conversation ID back to client
+          // If new conversation, emit the created conversation ID back to client (only for auth, temp for unauth)
           if (isNewConversation) {
-            socket.emit('conversation_created', { conversationId, userId });
+            socket.emit('conversation_created', { conversationId, userId: isAuthenticated ? userId : 'anonymous' });
           }
 
           console.log(`[DEBUG] Handler completed at ${new Date().toISOString()}, total time: ${Date.now() - startTime}ms`);
