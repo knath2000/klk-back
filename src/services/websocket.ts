@@ -264,8 +264,8 @@ class WebSocketService {
             });
             console.log('✅ Translation service returned result for:', data.query, 'keys:', Object.keys(result));
           } catch (translationError: any) {
-            console.error('❌ Translation service error for', data.query, ':', translationError.message);
-            socket.emit('translation_error', { message: translationError.message || 'Translation failed' });
+            console.error('❌ Translation service error for', data.query, ':', (translationError as Error).message);
+            socket.emit('translation_error', { message: (translationError as Error).message || 'Translation failed' });
             return;
           }
 
@@ -622,22 +622,34 @@ class WebSocketService {
         }
 
         try {
-          // Verify user access
-          const hasAccess = await collaborationService.hasAccessToConversation(conversationId, userId);
+          // Check if conversation exists and user has access
           const conversation = await conversationService.getConversation(conversationId);
-          if (!hasAccess && (!conversation || conversation.user_id !== userId)) {
-            socket.emit('error', { message: 'Access denied to conversation history' });
-            return;
+          
+          if (conversation) {
+            // Conversation exists - verify user access
+            const hasAccess = await collaborationService.hasAccessToConversation(conversationId, userId);
+            if (!hasAccess && conversation.user_id !== userId) {
+              socket.emit('error', { message: 'Access denied to conversation history' });
+              return;
+            }
+            
+            // Fetch and return messages
+            const messages = await conversationService.getConversationMessages(conversationId);
+            socket.emit('history_loaded', {
+              conversationId,
+              messages: messages.slice(-50), // Last 50 for performance
+              timestamp: new Date().toISOString()
+            });
+            console.log(`📚 Loaded ${messages.length} messages for user ${userId} in conversation ${conversationId}`);
+          } else {
+            // Conversation doesn't exist - return empty history (normal for new users)
+            socket.emit('history_loaded', {
+              conversationId,
+              messages: [],
+              timestamp: new Date().toISOString()
+            });
+            console.log(`📚 Conversation ${conversationId} not found for user ${userId} - returning empty history`);
           }
-
-          // Fetch messages
-          const messages = await conversationService.getConversationMessages(conversationId);
-          socket.emit('history_loaded', {
-            conversationId,
-            messages: messages.slice(-50), // Last 50 for performance
-            timestamp: new Date().toISOString()
-          });
-          console.log(`📚 Loaded ${messages.length} messages for user ${userId} in conversation ${conversationId}`);
         } catch (error: any) {
           console.error('Error loading history:', error);
           socket.emit('error', { message: 'Failed to load conversation history' });

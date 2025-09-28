@@ -531,21 +531,33 @@ class WebSocketService {
                     return;
                 }
                 try {
-                    // Verify user access
-                    const hasAccess = await collaborationService_1.collaborationService.hasAccessToConversation(conversationId, userId);
+                    // Check if conversation exists and user has access
                     const conversation = await conversationService_1.conversationService.getConversation(conversationId);
-                    if (!hasAccess && (!conversation || conversation.user_id !== userId)) {
-                        socket.emit('error', { message: 'Access denied to conversation history' });
-                        return;
+                    if (conversation) {
+                        // Conversation exists - verify user access
+                        const hasAccess = await collaborationService_1.collaborationService.hasAccessToConversation(conversationId, userId);
+                        if (!hasAccess && conversation.user_id !== userId) {
+                            socket.emit('error', { message: 'Access denied to conversation history' });
+                            return;
+                        }
+                        // Fetch and return messages
+                        const messages = await conversationService_1.conversationService.getConversationMessages(conversationId);
+                        socket.emit('history_loaded', {
+                            conversationId,
+                            messages: messages.slice(-50), // Last 50 for performance
+                            timestamp: new Date().toISOString()
+                        });
+                        console.log(`📚 Loaded ${messages.length} messages for user ${userId} in conversation ${conversationId}`);
                     }
-                    // Fetch messages
-                    const messages = await conversationService_1.conversationService.getConversationMessages(conversationId);
-                    socket.emit('history_loaded', {
-                        conversationId,
-                        messages: messages.slice(-50), // Last 50 for performance
-                        timestamp: new Date().toISOString()
-                    });
-                    console.log(`📚 Loaded ${messages.length} messages for user ${userId} in conversation ${conversationId}`);
+                    else {
+                        // Conversation doesn't exist - return empty history (normal for new users)
+                        socket.emit('history_loaded', {
+                            conversationId,
+                            messages: [],
+                            timestamp: new Date().toISOString()
+                        });
+                        console.log(`📚 Conversation ${conversationId} not found for user ${userId} - returning empty history`);
+                    }
                 }
                 catch (error) {
                     console.error('Error loading history:', error);
