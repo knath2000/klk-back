@@ -66,6 +66,18 @@ class WebSocketService {
           authKeys: socket.handshake?.auth ? Object.keys(socket.handshake.auth) : []
         });
 
+        // Additional token format analysis
+        if (token) {
+          console.log('🔐 [WebSocket Auth] Token format analysis:', {
+            startsWithEyJ: token.startsWith('eyJ'),
+            containsDots: token.includes('.'),
+            dotCount: token.split('.').length,
+            totalLength: token.length,
+            firstChars: token.substring(0, 10),
+            lastChars: token.substring(token.length - 10)
+          });
+        }
+
         if (!token) {
           if (WebSocketService.REQUIRE_AUTH) {
             console.log('🔐 [WebSocket Auth] No token provided, REQUIRE_AUTH=true, rejecting');
