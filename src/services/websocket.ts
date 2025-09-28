@@ -388,6 +388,8 @@ class WebSocketService {
           let conversationId = data.conversationId;
           let isNewConversation = false;
           let tempConversationId = null;
+          // A handler-scoped resolved ID to use after auth checks/creation
+          let resolvedConversationId: string | undefined;
 
           if (isAuthenticated) {
             // For authenticated users, use persistent conversation
@@ -406,32 +408,63 @@ class WebSocketService {
               console.log('[DEBUG] Using existing conversationId:', conversationId);
             }
 
-            // Verify user access to conversation
+            // Verify user access to conversation; create if missing or stale/inaccessible id (stale localStorage)
             console.log('[DEBUG] Verifying user access to conversation');
-            const hasAccess = await collaborationService.hasAccessToConversation(conversationId, userId);
-            const conversation = await conversationService.getConversation(conversationId);
-            if (!hasAccess && (!conversation || conversation.user_id !== userId)) {
-              console.log('[DEBUG] Access denied');
-              socket.emit('error', { message: 'Access denied to conversation' });
+            let conversation = conversationId ? await conversationService.getConversation(conversationId) : null;
+            let hasAccess = false;
+            if (conversationId && conversation) {
+              hasAccess = await collaborationService.hasAccessToConversation(conversationId, userId);
+            }
+            if (!conversationId || !conversation) {
+              console.log('[DEBUG] Conversation not found; creating new for authenticated user');
+              const newConv = await conversationService.createConversation({
+                user_id: userId,
+                title: data.message.substring(0, 50) + '...',
+                model: data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
+                persona_id: data.selected_country_key
+              });
+              conversationId = newConv.id;
+              isNewConversation = true;
+              conversation = newConv as any;
+              console.log(`🆕 Created new conversation ${conversationId} for user ${userId} (replacement for missing/invalid id)`);
+            } else if (!hasAccess && conversation.user_id !== userId) {
+              console.log('[DEBUG] Access denied to existing conversation; creating fresh conversation for user');
+              const newConv = await conversationService.createConversation({
+                user_id: userId,
+                title: data.message.substring(0, 50) + '...',
+                model: data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
+                persona_id: data.selected_country_key
+              });
+              conversationId = newConv.id;
+              isNewConversation = true;
+              conversation = newConv as any;
+              console.log(`🆕 Created new conversation ${conversationId} for user ${userId} (no access to provided id)`);
+            }
+            console.log('[DEBUG] User access verified or new conversation established');
+
+            // Resolve a definite conversation id for typed usage
+            if (!conversationId) {
+              console.error('[DEBUG] Conversation ID unresolved after creation/access check');
+              socket.emit('error', { message: 'Failed to resolve conversation' });
               return;
             }
-            console.log('[DEBUG] User access verified');
+            resolvedConversationId = conversationId as string;
 
             // Store user message
             console.log('[DEBUG] Storing user message');
             const userMessageId = data.message_id || this.generateMessageId();
             await conversationService.addMessage({
-              conversation_id: conversationId,
+              conversation_id: resolvedConversationId,
               role: 'user',
               content: data.message,
               model: data.model || '',
-                persona_id: data.selected_country_key,
-                tokens_used: undefined
+              persona_id: data.selected_country_key,
+              tokens_used: undefined
             });
-            console.log(`💾 Stored user message ${userMessageId} in conversation ${conversationId}`);
+            console.log(`💾 Stored user message ${userMessageId} in conversation ${resolvedConversationId}`);
 
             // Emit user message confirmation to client
-            socket.emit('user_message_stored', { message_id: userMessageId, conversationId });
+            socket.emit('user_message_stored', { message_id: userMessageId, conversationId: resolvedConversationId });
           } else {
             // For unauthenticated users, use temporary conversation ID, skip DB
             console.log('[DEBUG] Unauthenticated user, using temporary conversation');
@@ -460,7 +493,7 @@ class WebSocketService {
           let messages: LLMMessage[];
           if (isAuthenticated) {
             console.log('[DEBUG] Fetching conversation history');
-            const history = await conversationService.getConversationMessages(conversationId);
+            const history = await conversationService.getConversationMessages(resolvedConversationId as string);
             console.log(`[DEBUG] Fetched ${history.length} history messages`);
             messages = [
               { role: 'system', content: persona.prompt_text },
@@ -569,14 +602,14 @@ class WebSocketService {
           // Store assistant message if authenticated
           if (isAuthenticated) {
             await conversationService.addMessage({
-              conversation_id: conversationId,
+              conversation_id: resolvedConversationId as string,
               role: 'assistant',
               content: fullContent,
               model: effectiveModel,
               persona_id: data.selected_country_key,
               tokens_used: undefined
             });
-            console.log(`💾 Stored assistant message ${assistantMessageId} in conversation ${conversationId}`);
+            console.log(`💾 Stored assistant message ${assistantMessageId} in conversation ${resolvedConversationId}`);
           } else {
             console.log('[DEBUG] Unauthenticated, skipping assistant message storage');
           }
@@ -624,12 +657,18 @@ class WebSocketService {
         try {
           // Check if conversation exists and user has access
           const conversation = await conversationService.getConversation(conversationId);
-          
+            
           if (conversation) {
             // Conversation exists - verify user access
             const hasAccess = await collaborationService.hasAccessToConversation(conversationId, userId);
             if (!hasAccess && conversation.user_id !== userId) {
-              socket.emit('error', { message: 'Access denied to conversation history' });
+              // Treat as stale/foreign id: return empty history without error to avoid UX regressions
+              socket.emit('history_loaded', {
+                conversationId,
+                messages: [],
+                timestamp: new Date().toISOString()
+              });
+              console.log(`📚 Access denied to ${conversationId} for user ${userId} - returning empty history`);
               return;
             }
             
