@@ -682,7 +682,13 @@ class WebSocketService {
             const messages = await conversationService.getConversationMessages(conversationId);
             socket.emit('history_loaded', {
               conversationId,
-              messages: messages.slice(-50), // Last 50 for performance
+              messages: messages.slice(-50).map(msg => ({
+                id: msg.id,
+                type: msg.role as 'user' | 'assistant',
+                content: msg.content,
+                timestamp: new Date(msg.created_at).getTime(), // Convert Date to number
+                country_key: msg.persona_id || undefined
+              })),
               timestamp: new Date().toISOString()
             });
             console.log(`📚 Loaded ${messages.length} messages for user ${userId} in conversation ${conversationId}`);
