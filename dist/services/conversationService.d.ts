@@ -62,6 +62,11 @@ export declare class ConversationService {
      * Search conversations
      */
     searchConversations(userId: string, query: string): Promise<Conversation[]>;
+    /**
+     * Internal helper: ensure a User row exists for the given id.
+     * Prevents FK violations when creating conversations for first-time authenticated users.
+     */
+    private ensureUserExists;
 }
 export declare const conversationService: ConversationService;
 //# sourceMappingURL=conversationService.d.ts.map

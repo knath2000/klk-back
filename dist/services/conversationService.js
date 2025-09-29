@@ -11,6 +11,8 @@ class ConversationService {
     async createConversation(conversationData) {
         const startTime = Date.now();
         console.log(`[ConversationService] createConversation started for user ${conversationData.user_id} at ${new Date(startTime).toISOString()}`);
+        // Ensure the user exists to satisfy FK constraint (conversations_user_id_fkey)
+        await this.ensureUserExists(conversationData.user_id);
         const created = await prisma.conversation.create({
             data: {
                 // Use provided id or let Prisma generate with @default(uuid())
@@ -274,6 +276,22 @@ class ConversationService {
         });
         console.log(`[ConversationService] searchConversations completed for user ${userId}, found ${rows.length} at ${new Date().toISOString()}, time: ${Date.now() - startTime}ms`);
         return rows;
+    }
+    /**
+     * Internal helper: ensure a User row exists for the given id.
+     * Prevents FK violations when creating conversations for first-time authenticated users.
+     */
+    async ensureUserExists(userId) {
+        try {
+            await prisma.user.upsert({
+                where: { id: userId },
+                update: { updated_at: new Date() },
+                create: { id: userId }
+            });
+        }
+        catch (e) {
+            console.warn('[ConversationService] ensureUserExists failed:', e?.message || e);
+        }
     }
 }
 exports.ConversationService = ConversationService;
