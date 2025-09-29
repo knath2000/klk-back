@@ -330,7 +330,9 @@ class WebSocketService {
                                 user_id: userId,
                                 title: data.message.substring(0, 50) + '...', // Initial title from first message
                                 model: data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
-                                persona_id: data.selected_country_key
+                                persona_id: data.selected_country_key,
+                                email: socket.user?.email,
+                                name: socket.user?.name
                             });
                             conversationId = newConv.id;
                             isNewConversation = true;
@@ -352,7 +354,9 @@ class WebSocketService {
                                 user_id: userId,
                                 title: data.message.substring(0, 50) + '...',
                                 model: data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
-                                persona_id: data.selected_country_key
+                                persona_id: data.selected_country_key,
+                                email: socket.user?.email,
+                                name: socket.user?.name
                             });
                             conversationId = newConv.id;
                             isNewConversation = true;
@@ -365,7 +369,9 @@ class WebSocketService {
                                 user_id: userId,
                                 title: data.message.substring(0, 50) + '...',
                                 model: data.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
-                                persona_id: data.selected_country_key
+                                persona_id: data.selected_country_key,
+                                email: socket.user?.email,
+                                name: socket.user?.name
                             });
                             conversationId = newConv.id;
                             isNewConversation = true;

@@ -12,7 +12,7 @@ class ConversationService {
         const startTime = Date.now();
         console.log(`[ConversationService] createConversation started for user ${conversationData.user_id} at ${new Date(startTime).toISOString()}`);
         // Ensure the user exists to satisfy FK constraint (conversations_user_id_fkey)
-        await this.ensureUserExists(conversationData.user_id);
+        await this.ensureUserExists(conversationData.user_id, conversationData.email, conversationData.name);
         const created = await prisma.conversation.create({
             data: {
                 // Use provided id or let Prisma generate with @default(uuid())
@@ -281,12 +281,25 @@ class ConversationService {
      * Internal helper: ensure a User row exists for the given id.
      * Prevents FK violations when creating conversations for first-time authenticated users.
      */
-    async ensureUserExists(userId) {
+    async ensureUserExists(userId, email, name) {
         try {
+            // Build a deterministic, unique, and non-null fallback email to satisfy DB NOT NULL + UNIQUE(email)
+            const fallbackEmail = email && email.trim().length > 0
+                ? email
+                : `stack-${userId}@users.local`;
             await prisma.user.upsert({
                 where: { id: userId },
-                update: { updated_at: new Date() },
-                create: { id: userId }
+                update: {
+                    updated_at: new Date(),
+                    // Always ensure email is non-null on update for NOT NULL column safety
+                    email: fallbackEmail,
+                    ...(name ? { name } : {}),
+                },
+                create: {
+                    id: userId,
+                    email: fallbackEmail,
+                    ...(name ? { name } : {}),
+                }
             });
         }
         catch (e) {

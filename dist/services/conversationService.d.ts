@@ -9,6 +9,8 @@ export declare class ConversationService {
         model?: string;
         persona_id?: string;
         id?: string;
+        email?: string;
+        name?: string;
     }): Promise<Conversation>;
     /**
      * Get conversation by ID
