@@ -677,7 +677,7 @@ class WebSocketService {
               console.log(`📚 Access denied to ${conversationId} for user ${userId} - returning empty history`);
               return;
             }
-            
+
             // Fetch and return messages
             const messages = await conversationService.getConversationMessages(conversationId);
             socket.emit('history_loaded', {
@@ -704,6 +704,32 @@ class WebSocketService {
         } catch (error: any) {
           console.error('Error loading history:', error);
           socket.emit('error', { message: 'Failed to load conversation history' });
+        }
+      });
+
+      // Create conversation handler
+      socket.on('create_conversation', async (data: { title?: string; persona_id?: string }) => {
+        const userId = (socket as any).user?.sub;
+        if (!userId) {
+          console.log('❌ Create conversation: Authentication required');
+          socket.emit('error', { message: 'Authentication required to create conversation' });
+          return;
+        }
+
+        try {
+          const newConv = await conversationService.createConversation({
+            user_id: userId,
+            title: data.title || 'New Chat',
+            model: process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
+            persona_id: data.persona_id || undefined,
+            email: (socket as any).user?.email,
+            name: (socket as any).user?.name
+          });
+          console.log(`🆕 Created new conversation ${newConv.id} for user ${userId}`);
+          socket.emit('conversation_created', { conversationId: newConv.id, userId });
+        } catch (error: any) {
+          console.error('Error creating conversation:', error);
+          socket.emit('error', { message: 'Failed to create conversation' });
         }
       });
 
