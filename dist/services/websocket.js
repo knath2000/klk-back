@@ -201,13 +201,30 @@ class WebSocketService {
                     let result;
                     try {
                         const authedUserId = socket.user?.sub || socket.id;
-                        result = await translationService_1.translationService.translate({
-                            text: data.query,
-                            sourceLang: data.language || 'en',
-                            targetLang: 'es',
-                            context: data.context,
-                            userId: authedUserId
-                        });
+                        // Retry function with exponential backoff
+                        const attempt = async (tries = 0) => {
+                            try {
+                                return await translationService_1.translationService.translate({
+                                    text: data.query,
+                                    sourceLang: data.language || 'en',
+                                    targetLang: 'es',
+                                    context: data.context,
+                                    userId: authedUserId
+                                });
+                            }
+                            catch (err) {
+                                if (tries < 2) {
+                                    const delay = Math.min(500 * 2 ** tries, 2000);
+                                    console.log(`🔁 Retry translation (${tries + 1}) in ${delay}ms`);
+                                    await new Promise((r) => setTimeout(r, delay));
+                                    return attempt(tries + 1);
+                                }
+                                console.error('❌ Translation failed after retries', err);
+                                socket.emit('translation_fallback', { transport, reason: String(err?.message || err) });
+                                throw err;
+                            }
+                        };
+                        result = await attempt();
                         console.log('✅ Translation service returned result for:', data.query, 'keys:', Object.keys(result));
                     }
                     catch (translationError) {
@@ -589,7 +606,13 @@ class WebSocketService {
                         const messages = await conversationService_1.conversationService.getConversationMessages(conversationId);
                         socket.emit('history_loaded', {
                             conversationId,
-                            messages: messages.slice(-50), // Last 50 for performance
+                            messages: messages.slice(-50).map(msg => ({
+                                id: msg.id,
+                                type: msg.role,
+                                content: msg.content,
+                                timestamp: new Date(msg.created_at).getTime(), // Convert Date to number
+                                country_key: msg.persona_id || undefined
+                            })),
                             timestamp: new Date().toISOString()
                         });
                         console.log(`📚 Loaded ${messages.length} messages for user ${userId} in conversation ${conversationId}`);
@@ -607,6 +630,31 @@ class WebSocketService {
                 catch (error) {
                     console.error('Error loading history:', error);
                     socket.emit('error', { message: 'Failed to load conversation history' });
+                }
+            });
+            // Create conversation handler
+            socket.on('create_conversation', async (data) => {
+                const userId = socket.user?.sub;
+                if (!userId) {
+                    console.log('❌ Create conversation: Authentication required');
+                    socket.emit('error', { message: 'Authentication required to create conversation' });
+                    return;
+                }
+                try {
+                    const newConv = await conversationService_1.conversationService.createConversation({
+                        user_id: userId,
+                        title: data.title || 'New Chat',
+                        model: process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
+                        persona_id: data.persona_id || undefined,
+                        email: socket.user?.email,
+                        name: socket.user?.name
+                    });
+                    console.log(`🆕 Created new conversation ${newConv.id} for user ${userId}`);
+                    socket.emit('conversation_created', { conversationId: newConv.id, userId });
+                }
+                catch (error) {
+                    console.error('Error creating conversation:', error);
+                    socket.emit('error', { message: 'Failed to create conversation' });
                 }
             });
             // Add general error handler for connection issues

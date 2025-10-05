@@ -42,7 +42,7 @@ export const TranslationResponseSchema = z.object({
     english: z.string().optional(),
     context: z.string().optional(),
   })),
-  conjugations: z.record(z.any()),
+  conjugations: z.record(z.string(), z.record(z.string(), z.string())),
   audio: z.union([
     z.array(z.object({ url: z.string().optional(), pronunciation: z.string().optional(), text: z.string().optional(), type: z.string().optional() })),
     z.object({ ipa: z.string().optional(), suggestions: z.array(z.string()).optional() })
