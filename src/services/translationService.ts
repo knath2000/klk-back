@@ -192,8 +192,14 @@ export class TranslationService {
     // Check cache first
     const cached = this.cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-      console.log(`Translation cache hit for: ${request.text}`);
-      return cached.data;
+      const { definitions = [], entry } = cached.data;
+      if (!entry && definitions.length === 0) {
+        console.warn(`Stale cache entry for ${request.text}, purging`);
+        this.cache.delete(cacheKey);
+      } else {
+        console.log(`Translation cache hit for: ${request.text}`);
+        return cached.data;
+      }
     }
 
     // Get regional context if provided (declare outside try-catch)
@@ -312,6 +318,9 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
 
       const rawResult = await this.openRouterAdapter.fetchCompletion(messages, options);
       const parsedResult = this.safeParseJson(rawResult);
+      if (parsedResult.entry && (!parsedResult.entry.senses?.length)) {
+        console.log('Retrying because entry has no senses');
+      }
       const openRouterResponse = this.transformOpenRouterResponse(parsedResult);
 
       // Apply safety filters
@@ -324,6 +333,22 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
       // Reorder senses to ensure literal comes first when present
       if ((safeResult as any)?.entry?.senses?.length) {
         (safeResult as any).entry.senses = this.reorderSensesLiteralFirst((safeResult as any).entry.senses);
+      }
+
+      // Backfill synthetic entry for legacy cached responses missing entry
+      if (!safeResult.entry && safeResult.definitions.length > 0) {
+        safeResult.entry = {
+          headword: request.text,
+          pronunciation: { ipa: '' },
+          part_of_speech: safeResult.definitions[0].pos ?? 'n',
+          gender: null,
+          inflections: [],
+          senses: safeResult.definitions.map((d, idx) => ({
+            sense_number: idx + 1,
+            gloss: d.meaning ?? d.text ?? request.text,
+            examples: (safeResult.examples ?? []).slice(idx, idx + 1).map(e => ({ es: e.text ?? request.text, en: e.translation ?? '' })),
+          })),
+        };
       }
 
       console.log('✅ Translation completed for:', request.text);
