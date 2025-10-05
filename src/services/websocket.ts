@@ -252,22 +252,40 @@ class WebSocketService {
           }
 
           // Call translation service with error handling
-          let result;
-          try {
-            const authedUserId = (socket as any).user?.sub || socket.id;
-            result = await translationService.translate({
-              text: data.query,
-              sourceLang: data.language || 'en',
-              targetLang: 'es',
-              context: data.context,
-              userId: authedUserId
-            });
-            console.log('✅ Translation service returned result for:', data.query, 'keys:', Object.keys(result));
-          } catch (translationError: any) {
-            console.error('❌ Translation service error for', data.query, ':', (translationError as Error).message);
-            socket.emit('translation_error', { message: (translationError as Error).message || 'Translation failed' });
-            return;
-          }
+           let result;
+           try {
+             const authedUserId = (socket as any).user?.sub || socket.id;
+             
+             // Retry function with exponential backoff
+             const attempt = async (tries = 0) => {
+               try {
+                 return await translationService.translate({
+                   text: data.query,
+                   sourceLang: data.language || 'en',
+                   targetLang: 'es',
+                   context: data.context,
+                   userId: authedUserId
+                 });
+               } catch (err) {
+                 if (tries < 2) {
+                   const delay = Math.min(500 * 2 ** tries, 2000);
+                   console.log(`🔁 Retry translation (${tries + 1}) in ${delay}ms`);
+                   await new Promise((r) => setTimeout(r, delay));
+                   return attempt(tries + 1);
+                 }
+                 console.error('❌ Translation failed after retries', err);
+                 socket.emit('translation_fallback', { transport, reason: String((err as Error)?.message || err) });
+                 throw err;
+               }
+             };
+             
+             result = await attempt();
+             console.log('✅ Translation service returned result for:', data.query, 'keys:', Object.keys(result));
+           } catch (translationError: any) {
+             console.error('❌ Translation service error for', data.query, ':', (translationError as Error).message);
+             socket.emit('translation_error', { message: (translationError as Error).message || 'Translation failed' });
+             return;
+           }
 
           // Transform result to match frontend TranslationResult interface
           const frontendResult = {

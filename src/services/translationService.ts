@@ -1,6 +1,7 @@
 import { LLMMessage, LLMOptions } from '../types';
 import { OpenRouterAdapter } from './openrouterAdapter';
 import { personaService } from './personaService';
+import { TranslationResponseSchema } from './translationSchema';
 
 export interface TranslationRequest {
   text: string;
@@ -108,17 +109,19 @@ export class TranslationService {
   }
 
   private transformOpenRouterResponse(openRouterResponse: any): TranslationResponse {
+    // Validate against schema first
+    const validated = TranslationResponseSchema.parse(openRouterResponse);
+    
     // Accept either legacy structured JSON or the new DictionaryEntry JSON.
     // If it's a DictionaryEntry (has headword + senses), map it to legacy fields and return with entry.
     const isDictionaryEntry =
-      openRouterResponse &&
-      typeof openRouterResponse === 'object' &&
-      Array.isArray(openRouterResponse.senses) &&
-      typeof openRouterResponse.headword === 'string' &&
-      openRouterResponse.pronunciation;
+      validated.entry &&
+      Array.isArray(validated.entry.senses) &&
+      typeof validated.entry.headword === 'string' &&
+      validated.entry.pronunciation;
 
     if (isDictionaryEntry) {
-      const entry = openRouterResponse as DictionaryEntry;
+      const entry = validated.entry as DictionaryEntry;
 
       // Ensure slang/colloquial/pejorative come first (defensive sort if model didn't order)
       const priority = (regs?: string[]) => {
@@ -156,11 +159,13 @@ export class TranslationService {
 
     // Legacy structure passthrough (backward-compat)
     return {
-      definitions: openRouterResponse.definitions || [],
-      examples: openRouterResponse.examples || [],
-      conjugations: openRouterResponse.conjugations || {},
-      audio: openRouterResponse.audio || { ipa: '', suggestions: [] },
-      related: openRouterResponse.related || { synonyms: [], antonyms: [] }
+      definitions: validated.definitions || [],
+      examples: validated.examples || [],
+      conjugations: validated.conjugations || {},
+      audio: validated.audio || { ipa: '', suggestions: [] },
+      related: Array.isArray(validated.related) 
+        ? { synonyms: [], antonyms: [] } // Convert array format to object format
+        : (validated.related || { synonyms: [], antonyms: [] })
     };
   }
 
@@ -294,15 +299,18 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
 
       const rawResult = await this.openRouterAdapter.fetchCompletion(messages, options);
       const parsedResult = this.safeParseJson(rawResult);
-      const result = this.transformOpenRouterResponse(parsedResult);
+      const openRouterResponse = this.transformOpenRouterResponse(parsedResult);
+
+      // Apply safety filters
+      const safeResult = this.applySafetyFilters(openRouterResponse);
 
       // Post-transform: ensure literal-first for known verb+noun compounds (e.g., huelebicho/welebicho)
-      if ((result as any)?.entry) {
-        this.ensureLiteralSenseForCompounds((result as any).entry, request.text);
+      if ((safeResult as any)?.entry) {
+        this.ensureLiteralSenseForCompounds((safeResult as any).entry, request.text);
       }
       // Reorder senses to ensure literal comes first when present
-      if ((result as any)?.entry?.senses?.length) {
-        (result as any).entry.senses = this.reorderSensesLiteralFirst((result as any).entry.senses);
+      if ((safeResult as any)?.entry?.senses?.length) {
+        (safeResult as any).entry.senses = this.reorderSensesLiteralFirst((safeResult as any).entry.senses);
       }
 
       console.log('✅ Translation completed for:', request.text);
@@ -310,11 +318,11 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
       // If the entry exists but has too few senses (e.g., only 1), force a retry prompting for full coverage.
       // Post-transform: ensure literal-first for known verb+noun compounds (e.g., huelebicho/welebicho)
       // Reorder senses to ensure literal comes first when present
-      if ((result as any)?.entry?.senses?.length) {
-        (result as any).entry.senses = this.reorderSensesLiteralFirst((result as any).entry.senses);
+      if ((safeResult as any)?.entry?.senses?.length) {
+        (safeResult as any).entry.senses = this.reorderSensesLiteralFirst((safeResult as any).entry.senses);
       }
 
-      const entrySensesCount = (result as any)?.entry?.senses?.length ?? 0;
+      const entrySensesCount = (safeResult as any)?.entry?.senses?.length ?? 0;
       // Retry when senses are missing or insufficient (< 3), to enumerate all common senses
       if (entrySensesCount < 3) {
         console.log(`🔁 Retry: insufficient sense coverage (${entrySensesCount}) for "${request.text}". Requesting expanded, multi-sense entry.`);
@@ -360,12 +368,12 @@ Instructions:
       }
 
       // Cache the result
-      this.cache.set(cacheKey, { data: result, timestamp: Date.now() });
+      this.cache.set(cacheKey, { data: safeResult, timestamp: Date.now() });
 
       // Metrics: Increment success counter
       this.metrics.successes.inc();
 
-      return result;
+      return safeResult;
     } catch (error: any) {
       console.error('❌ OpenRouter failed for', request.text, ':', error.message);
       console.error('OpenRouter error details:', {
@@ -564,22 +572,22 @@ Instructions:
                   items: {
                     type: "object",
                     properties: { es: { type: "string" }, en: { type: "string" } },
-                    required: ["es", "en"]
-                  }
+                    required: ["es", "en"],
+                  },
                 },
                 synonyms: { type: "array", items: { type: "string" } },
                 antonyms: { type: "array", items: { type: "string" } },
                 cross_references: { type: "array", items: { type: "string" } },
                 // New: explicit Spanish translation field per sense (optional)
-                translation_es: { type: "string" }
+                translation_es: { type: "string" },
               },
-              required: ["gloss", "examples"]
-            }
-          }
+              required: ["gloss", "examples"],
+            },
+          },
         },
-        required: ["headword", "pronunciation", "senses"]
+        required: ["headword", "pronunciation", "senses"],
       },
-      strict: false
+      strict: false,
     };
   }
 
@@ -751,6 +759,44 @@ Instructions:
     } catch {
       // no-op on safe guard
     }
+  }
+
+  /**
+   * Safety filter to check for unsafe content in dictionary outputs
+   */
+  private containsUnsafeContent(text: string): boolean {
+    // Check for sensitive patterns
+    const unsafePatterns = [
+      /\b(?:ssn|social.security)\b/i,
+      /\b\d{3}-\d{2}-\d{4}\b/, // SSN format
+      /\b\d{9}\b/, // 9-digit numbers that might be SSNs
+    ];
+    
+    return unsafePatterns.some(pattern => pattern.test(text));
+  }
+
+  /**
+   * Apply safety filters to translation response
+   */
+  private applySafetyFilters(result: TranslationResponse): TranslationResponse {
+    const resultString = JSON.stringify(result);
+    if (this.containsUnsafeContent(resultString)) {
+      console.warn('⚠️ Unsafe dictionary content detected, quarantining result');
+      // Return a safe fallback
+      return {
+        definitions: [{
+          text: 'Content filtered for safety',
+          meaning: 'Content filtered for safety',
+          pos: 'filtered',
+          usage: 'safety'
+        }],
+        examples: [],
+        conjugations: {},
+        audio: { ipa: '', suggestions: [] },
+        related: { synonyms: [], antonyms: [] }
+      };
+    }
+    return result;
   }
 }
 
