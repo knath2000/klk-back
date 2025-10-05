@@ -34,22 +34,22 @@ export const TranslationResponseSchema = z.object({
     pos: z.string().optional(),
     examples: z.array(z.string()).optional(),
     usage: z.string().optional(),
-  })),
+  })).default([]),
   examples: z.array(z.object({
     text: z.string().optional(),
     translation: z.string().optional(),
     spanish: z.string().optional(),
     english: z.string().optional(),
     context: z.string().optional(),
-  })),
-  conjugations: z.record(z.string(), z.record(z.string(), z.string())),
+  })).default([]),
+  conjugations: z.record(z.string(), z.record(z.string(), z.string())).default({}),
   audio: z.union([
     z.array(z.object({ url: z.string().optional(), pronunciation: z.string().optional(), text: z.string().optional(), type: z.string().optional() })),
     z.object({ ipa: z.string().optional(), suggestions: z.array(z.string()).optional() })
-  ]),
+  ]).default({ ipa: '', suggestions: [] }),
   related: z.union([
     z.array(z.object({ word: z.string(), type: z.string() })),
     z.object({ synonyms: z.array(z.string()).optional(), antonyms: z.array(z.string()).optional() })
-  ]),
+  ]).default({ synonyms: [], antonyms: [] }),
   entry: DictionaryEntrySchema.optional(),
 });

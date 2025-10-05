@@ -109,8 +109,21 @@ export class TranslationService {
   }
 
   private transformOpenRouterResponse(openRouterResponse: any): TranslationResponse {
+    // Log raw response for debugging schema issues
+    console.log('🔍 Raw OpenRouter response before validation:', JSON.stringify(openRouterResponse, null, 2));
+
+    // Inject defaults for missing optional fields to prevent Zod validation errors
+    const responseWithDefaults = {
+      definitions: openRouterResponse.definitions || [],
+      examples: openRouterResponse.examples || [],
+      conjugations: openRouterResponse.conjugations || {},
+      audio: openRouterResponse.audio || { ipa: '', suggestions: [] },
+      related: openRouterResponse.related || { synonyms: [], antonyms: [] },
+      entry: openRouterResponse.entry, // optional field
+    };
+
     // Validate against schema first
-    const validated = TranslationResponseSchema.parse(openRouterResponse);
+    const validated = TranslationResponseSchema.parse(responseWithDefaults);
     
     // Accept either legacy structured JSON or the new DictionaryEntry JSON.
     // If it's a DictionaryEntry (has headword + senses), map it to legacy fields and return with entry.
