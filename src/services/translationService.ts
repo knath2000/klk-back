@@ -140,6 +140,11 @@ export class TranslationService {
       entry: openRouterResponse.entry, // optional field
     };
 
+    // Normalize gender and inflections in entry before schema validation
+    if (responseWithDefaults.entry) {
+      this.normalizeDictionaryEntry(responseWithDefaults.entry);
+    }
+
     // Validate against schema first
     const validated = TranslationResponseSchema.parse(responseWithDefaults);
     
@@ -208,6 +213,50 @@ export class TranslationService {
         ? { synonyms: [], antonyms: [] } // Convert array format to object format
         : (validated.related || { synonyms: [], antonyms: [] })
     };
+  }
+  /**
+   * Normalize gender and inflections fields in a DictionaryEntry to match schema expectations.
+   * Maps gender variants (masculine/feminine/common) to schema enum values (m/f/mf).
+   * Coerces inflections to arrays when missing or scalar.
+   */
+  private normalizeDictionaryEntry(entry: any): void {
+    if (!entry) return;
+
+    // Normalize gender field
+    if (entry.gender !== null && entry.gender !== undefined) {
+      const genderStr = String(entry.gender).toLowerCase().trim();
+      switch (genderStr) {
+        case 'masculine':
+        case 'masc':
+        case 'm':
+          entry.gender = 'm';
+          break;
+        case 'feminine':
+        case 'fem':
+        case 'f':
+          entry.gender = 'f';
+          break;
+        case 'common':
+        case 'mf':
+          entry.gender = 'mf';
+          break;
+        default:
+          console.warn(`⚠️ Unrecognized gender value: "${entry.gender}", setting to null`);
+          entry.gender = null;
+          break;
+      }
+    }
+
+    // Normalize inflections field - ensure it's an array
+    if (entry.inflections === null || entry.inflections === undefined) {
+      entry.inflections = [];
+    } else if (!Array.isArray(entry.inflections)) {
+      // Coerce scalar values to single-element array
+      entry.inflections = [String(entry.inflections)];
+    } else {
+      // Ensure all elements are strings
+      entry.inflections = entry.inflections.map((inf: any) => String(inf || '').trim()).filter(Boolean);
+    }
   }
 
   async translate(request: TranslationRequest): Promise<TranslationResponse> {
