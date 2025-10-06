@@ -28,6 +28,7 @@ class WebSocketService {
   private users: Map<string, WebSocketUser> = new Map();
   private conversationRooms: Map<string, Set<string>> = new Map(); // conversationId -> Set of userIds
   private rateLimitMap: Map<string, { count: number; resetTime: number }> = new Map();
+  private guestRateLimitMap: Map<string, { count: number; resetTime: number }> = new Map();
   private socketActivity: Map<string, number> = new Map(); // socketId -> lastActivity
   private idleTimeoutCleanup: NodeJS.Timeout | null = null;
   private metrics = {
@@ -51,6 +52,7 @@ class WebSocketService {
     : undefined;
   private static EXPECTED_AUD = process.env.STACK_EXPECTED_AUD; // optional
   private static REQUIRE_AUTH = process.env.REQUIRE_AUTH === 'true';
+  private static ALLOW_GUEST_TRANSLATION = process.env.ALLOW_GUEST_TRANSLATION === 'true';
   
   constructor(io: Server) {
     this.io = io;
@@ -79,11 +81,11 @@ class WebSocketService {
         }
 
         if (!token) {
-          if (WebSocketService.REQUIRE_AUTH) {
-            console.log('🔐 [WebSocket Auth] No token provided, REQUIRE_AUTH=true, rejecting');
+          if (WebSocketService.REQUIRE_AUTH && !WebSocketService.ALLOW_GUEST_TRANSLATION) {
+            console.log('🔐 [WebSocket Auth] No token provided, REQUIRE_AUTH=true, ALLOW_GUEST_TRANSLATION=false, rejecting');
             return next(new Error('Token required'));
           } else {
-            console.log('🔐 [WebSocket Auth] No token provided, REQUIRE_AUTH=false, allowing anonymous');
+            console.log('🔐 [WebSocket Auth] No token provided, allowing anonymous (REQUIRE_AUTH=false or ALLOW_GUEST_TRANSLATION=true)');
             return next();
           }
         }
@@ -221,16 +223,24 @@ class WebSocketService {
         const transport = socket.conn?.transport?.name || 'unknown';
         console.log('Transport for translation_request:', transport);
 
-        // Rate limiting: Simple in-memory check (consider Redis for production)
+        // Rate limiting: Different limits for authenticated vs guest users
         const now = Date.now();
-        const userKey = socket.id;
-        const rateLimitData = this.rateLimitMap.get(userKey);
+        const userId = (socket as any).user?.sub;
+        const isAuthenticated = !!userId;
+        const userKey = isAuthenticated ? userId : socket.id; // Use userId for auth, socketId for guests
+        const rateLimitMap = isAuthenticated ? this.rateLimitMap : this.guestRateLimitMap;
+        const maxRequests = isAuthenticated ? 10 : 3; // Lower limit for guests
+
+        const rateLimitData = rateLimitMap.get(userKey);
         if (!rateLimitData) {
-          this.rateLimitMap.set(userKey, { count: 0, resetTime: now + 60000 }); // 1 min window
+          rateLimitMap.set(userKey, { count: 0, resetTime: now + 60000 }); // 1 min window
         }
-        const currentLimit = this.rateLimitMap.get(userKey)!;
-        if (currentLimit.count >= 10) { // 10 requests per minute
-          socket.emit('translation_error', { message: 'Rate limit exceeded. Please wait.' });
+        const currentLimit = rateLimitMap.get(userKey)!;
+        if (currentLimit.count >= maxRequests) {
+          const message = isAuthenticated
+            ? 'Rate limit exceeded. Please wait.'
+            : 'Guest rate limit exceeded. Please sign in for higher limits or wait.';
+          socket.emit('translation_error', { message });
           return;
         }
         currentLimit.count++;
@@ -969,9 +979,10 @@ class WebSocketService {
           this.users.delete(socket.id);
         }
 
-        // Cleanup activity tracking and rate limit map
+        // Cleanup activity tracking and rate limit maps
         this.socketActivity.delete(socket.id);
         this.rateLimitMap.delete(socket.id);
+        this.guestRateLimitMap.delete(socket.id);
       });
     });
   }

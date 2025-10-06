@@ -12,6 +12,7 @@ class WebSocketService {
         this.users = new Map();
         this.conversationRooms = new Map(); // conversationId -> Set of userIds
         this.rateLimitMap = new Map();
+        this.guestRateLimitMap = new Map();
         this.socketActivity = new Map(); // socketId -> lastActivity
         this.idleTimeoutCleanup = null;
         this.metrics = {
@@ -43,12 +44,12 @@ class WebSocketService {
                     });
                 }
                 if (!token) {
-                    if (WebSocketService.REQUIRE_AUTH) {
-                        console.log('🔐 [WebSocket Auth] No token provided, REQUIRE_AUTH=true, rejecting');
+                    if (WebSocketService.REQUIRE_AUTH && !WebSocketService.ALLOW_GUEST_TRANSLATION) {
+                        console.log('🔐 [WebSocket Auth] No token provided, REQUIRE_AUTH=true, ALLOW_GUEST_TRANSLATION=false, rejecting');
                         return next(new Error('Token required'));
                     }
                     else {
-                        console.log('🔐 [WebSocket Auth] No token provided, REQUIRE_AUTH=false, allowing anonymous');
+                        console.log('🔐 [WebSocket Auth] No token provided, allowing anonymous (REQUIRE_AUTH=false or ALLOW_GUEST_TRANSLATION=true)');
                         return next();
                     }
                 }
@@ -171,16 +172,23 @@ class WebSocketService {
                 console.log('📨 Received translation_request:', { ...data, id: socket.id });
                 const transport = socket.conn?.transport?.name || 'unknown';
                 console.log('Transport for translation_request:', transport);
-                // Rate limiting: Simple in-memory check (consider Redis for production)
+                // Rate limiting: Different limits for authenticated vs guest users
                 const now = Date.now();
-                const userKey = socket.id;
-                const rateLimitData = this.rateLimitMap.get(userKey);
+                const userId = socket.user?.sub;
+                const isAuthenticated = !!userId;
+                const userKey = isAuthenticated ? userId : socket.id; // Use userId for auth, socketId for guests
+                const rateLimitMap = isAuthenticated ? this.rateLimitMap : this.guestRateLimitMap;
+                const maxRequests = isAuthenticated ? 10 : 3; // Lower limit for guests
+                const rateLimitData = rateLimitMap.get(userKey);
                 if (!rateLimitData) {
-                    this.rateLimitMap.set(userKey, { count: 0, resetTime: now + 60000 }); // 1 min window
+                    rateLimitMap.set(userKey, { count: 0, resetTime: now + 60000 }); // 1 min window
                 }
-                const currentLimit = this.rateLimitMap.get(userKey);
-                if (currentLimit.count >= 10) { // 10 requests per minute
-                    socket.emit('translation_error', { message: 'Rate limit exceeded. Please wait.' });
+                const currentLimit = rateLimitMap.get(userKey);
+                if (currentLimit.count >= maxRequests) {
+                    const message = isAuthenticated
+                        ? 'Rate limit exceeded. Please wait.'
+                        : 'Guest rate limit exceeded. Please sign in for higher limits or wait.';
+                    socket.emit('translation_error', { message });
                     return;
                 }
                 currentLimit.count++;
@@ -841,9 +849,10 @@ class WebSocketService {
                     // Remove user from tracking
                     this.users.delete(socket.id);
                 }
-                // Cleanup activity tracking and rate limit map
+                // Cleanup activity tracking and rate limit maps
                 this.socketActivity.delete(socket.id);
                 this.rateLimitMap.delete(socket.id);
+                this.guestRateLimitMap.delete(socket.id);
             });
         });
     }
@@ -898,6 +907,7 @@ WebSocketService.JWKS = WebSocketService.STACK_PROJECT_ID
     : undefined;
 WebSocketService.EXPECTED_AUD = process.env.STACK_EXPECTED_AUD; // optional
 WebSocketService.REQUIRE_AUTH = process.env.REQUIRE_AUTH === 'true';
+WebSocketService.ALLOW_GUEST_TRANSLATION = process.env.ALLOW_GUEST_TRANSLATION === 'true';
 // Export function to initialize WebSocket service
 function initializeWebSocket(io) {
     return new WebSocketService(io);

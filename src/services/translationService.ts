@@ -170,13 +170,23 @@ export class TranslationService {
       };
     }
 
+    // If we have a dictionary entry but no definitions, synthesize them from senses
+    if (isDictionaryEntry && (!validated.definitions || validated.definitions.length === 0)) {
+      const entry = validated.entry as DictionaryEntry;
+      console.log('🔄 Synthesizing definitions from entry senses for:', entry.headword);
+      const synthesizedDefinitions = this.synthesizeDefinitionsFromEntry(entry);
+      validated.definitions = synthesizedDefinitions;
+      console.log(`✅ Synthesized ${synthesizedDefinitions.length} definitions from ${entry.senses.length} senses`);
+    }
+
+
     // Legacy structure passthrough (backward-compat)
     return {
       definitions: validated.definitions || [],
       examples: validated.examples || [],
       conjugations: validated.conjugations || {},
       audio: validated.audio || { ipa: '', suggestions: [] },
-      related: Array.isArray(validated.related) 
+      related: Array.isArray(validated.related)
         ? { synonyms: [], antonyms: [] } // Convert array format to object format
         : (validated.related || { synonyms: [], antonyms: [] })
     };
@@ -194,12 +204,15 @@ export class TranslationService {
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
       const { definitions = [], entry } = cached.data;
       if (!entry && definitions.length === 0) {
-        console.warn(`Stale cache entry for ${request.text}, purging`);
+        console.warn(`🔄 Stale cache entry for "${request.text}" (no definitions/entry), purging`);
         this.cache.delete(cacheKey);
+        this.metrics.errors.inc();
       } else {
-        console.log(`Translation cache hit for: ${request.text}`);
+        console.log(`✅ Translation cache hit for: "${request.text}" (age: ${Math.round((Date.now() - cached.timestamp) / 1000)}s, definitions: ${definitions.length}, hasEntry: ${!!entry})`);
         return cached.data;
       }
+    } else if (cached) {
+      console.log(`⏰ Cache expired for "${request.text}" (age: ${Math.round((Date.now() - cached.timestamp) / 1000)}s), fetching fresh`);
     }
 
     // Get regional context if provided (declare outside try-catch)
@@ -351,6 +364,9 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
         };
       }
 
+      // Persist raw response for debugging
+      this.persistRawResponse(request.text, parsedResult, safeResult);
+
       console.log('✅ Translation completed for:', request.text);
 
       // If the entry exists but has too few senses (e.g., only 1), force a retry prompting for full coverage.
@@ -407,6 +423,7 @@ Instructions:
 
       // Cache the result
       this.cache.set(cacheKey, { data: safeResult, timestamp: Date.now() });
+      console.log(`💾 Cached translation result for "${request.text}" (definitions: ${safeResult.definitions?.length || 0}, hasEntry: ${!!safeResult.entry})`);
 
       // Metrics: Increment success counter
       this.metrics.successes.inc();
@@ -739,11 +756,70 @@ Instructions:
   // Clear expired cache entries
   cleanupCache(): void {
     const now = Date.now();
+    let purgedCount = 0;
     for (const [key, value] of this.cache.entries()) {
       if (now - value.timestamp > this.CACHE_TTL) {
         this.cache.delete(key);
+        purgedCount++;
       }
     }
+    if (purgedCount > 0) {
+      console.log(`🧹 Purged ${purgedCount} expired cache entries`);
+    }
+  }
+
+  // Debug method to persist raw responses for analysis
+  persistRawResponse(query: string, rawResponse: any, transformedResponse: TranslationResponse): void {
+    try {
+      const debugEntry = {
+        timestamp: new Date().toISOString(),
+        query,
+        rawResponseLength: JSON.stringify(rawResponse).length,
+        transformedDefinitionsCount: transformedResponse.definitions?.length || 0,
+        hasEntry: !!transformedResponse.entry,
+        rawResponse: process.env.NODE_ENV === 'development' ? rawResponse : '[redacted in production]',
+      };
+      console.log('🔍 Raw response debug:', JSON.stringify(debugEntry, null, 2));
+    } catch (error) {
+      console.warn('Failed to persist raw response debug info:', error);
+    }
+  }
+
+  // Synthesize definitions from entry senses when definitions are missing
+  private synthesizeDefinitionsFromEntry(entry: DictionaryEntry): Array<{
+    text?: string;
+    meaning?: string;
+    partOfSpeech?: string;
+    pos?: string;
+    examples?: string[];
+    usage?: string;
+  }> {
+    if (!entry.senses || entry.senses.length === 0) {
+      return [{
+        text: entry.headword,
+        meaning: 'No definition available',
+        pos: entry.part_of_speech || 'unknown',
+        usage: 'synthesized'
+      }];
+    }
+
+    return entry.senses.map((sense, index) => {
+      const usageLabels = [
+        ...(sense.registers || []).map(r => r.toLowerCase()),
+        ...(sense.regions || []).map(r => r.toLowerCase())
+      ].join(', ');
+
+      const examples = (sense.examples || []).map(ex => `${ex.es} — ${ex.en}`);
+
+      return {
+        text: sense.gloss,
+        meaning: sense.gloss,
+        partOfSpeech: entry.part_of_speech,
+        pos: entry.part_of_speech,
+        examples: examples.length > 0 ? examples : undefined,
+        usage: usageLabels || undefined
+      };
+    });
   }
 
   /**

@@ -4,6 +4,7 @@ declare class WebSocketService {
     private users;
     private conversationRooms;
     private rateLimitMap;
+    private guestRateLimitMap;
     private socketActivity;
     private idleTimeoutCleanup;
     private metrics;
@@ -12,6 +13,7 @@ declare class WebSocketService {
     private static JWKS;
     private static EXPECTED_AUD;
     private static REQUIRE_AUTH;
+    private static ALLOW_GUEST_TRANSLATION;
     constructor(io: Server);
     private startIdleTimeoutCleanup;
     private cleanupIdleConnections;
