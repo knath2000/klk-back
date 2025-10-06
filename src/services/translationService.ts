@@ -112,6 +112,24 @@ export class TranslationService {
     // Log raw response for debugging schema issues
     console.log('🔍 Raw OpenRouter response before validation:', JSON.stringify(openRouterResponse, null, 2));
 
+    // Check if the response is a bare DictionaryEntry (has headword, senses, etc.)
+    const isBareDictionaryEntry = openRouterResponse &&
+      typeof openRouterResponse.headword === 'string' &&
+      Array.isArray(openRouterResponse.senses) &&
+      openRouterResponse.pronunciation;
+
+    if (isBareDictionaryEntry) {
+      console.log('🔄 Detected bare DictionaryEntry payload, wrapping in expected structure');
+      openRouterResponse = {
+        entry: openRouterResponse,
+        definitions: [],
+        examples: [],
+        conjugations: {},
+        audio: { ipa: '', suggestions: [] },
+        related: { synonyms: [], antonyms: [] }
+      };
+    }
+
     // Inject defaults for missing optional fields to prevent Zod validation errors
     const responseWithDefaults = {
       definitions: openRouterResponse.definitions || [],
