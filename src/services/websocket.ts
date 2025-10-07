@@ -7,7 +7,7 @@ import { conversationService } from './conversationService';
 import { personaService } from './personaService';
 import { collaborationService } from './collaborationService';
 import { translationService } from './translationService';
-import { OpenRouterAdapter } from './openrouterAdapter';
+import { KilocodeAdapter } from './kilocodexAdapter';
 import { LLMMessage, LLMOptions, DeltaChunk, UserMessagePayload } from '../types';
 
 interface WebSocketUser {
@@ -566,24 +566,24 @@ class WebSocketService {
             }
           }
           if (!effectiveModel) {
-            effectiveModel = process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+            effectiveModel = process.env.KILOCODE_DEFAULT_CHAT_MODEL || 'kilocode-coder-2025';
             console.log(`🔁 Fallback to default model for request ${data.message_id}: ${effectiveModel}`);
           }
 
           console.log('[OpenRouter] Model:', effectiveModel, 'Messages length:', messages.length);
 
           // Check for API key before proceeding
-          if (!process.env.OPENROUTER_API_KEY) {
-            const errorMsg = 'OpenRouter API key not configured';
-            console.error(`[OpenRouter] ${errorMsg}`);
+          if (!process.env.KILOCODE_API_KEY) {
+            const errorMsg = 'KiloCode API key not configured';
+            console.error(`[Kilocode] ${errorMsg}`);
             socket.emit('llm_error', { message: errorMsg });
             return;
           }
 
-          // Use OpenRouter for chat
-          const openRouterAdapter = new OpenRouterAdapter(
-            process.env.OPENROUTER_API_KEY || '',
-            process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
+          // Use KiloCode for chat
+          const kilocodeAdapter = new KilocodeAdapter(
+            process.env.KILOCODE_API_KEY || '',
+            process.env.KILOCODE_BASE_URL || 'https://api.kilocode.ai/v1'
           );
 
           const options: LLMOptions = {
@@ -594,7 +594,7 @@ class WebSocketService {
 
           // Stream response with timeout wrapper
           const streamPromise = (async () => {
-            const stream = openRouterAdapter.streamCompletion(messages, options);
+            const stream = kilocodeAdapter.streamCompletion(messages, options);
             let fullContent = '';
             const assistantMessageId = this.generateMessageId();
 

@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -58,12 +25,21 @@ const websocket_1 = require("./services/websocket");
 dotenv_1.default.config();
 // Log environment variables for debugging
 console.log('🔧 Environment Variables:', {
-    LANGDB_GATEWAY_URL: process.env.LANGDB_GATEWAY_URL,
-    LANGDB_API_KEY: process.env.LANGDB_API_KEY ? '[REDACTED]' : 'MISSING',
-    LANGDB_TIMEOUT: process.env.LANGDB_TIMEOUT,
+    KILOCODE_API_KEY: process.env.KILOCODE_API_KEY ? '[REDACTED]' : 'MISSING',
+    KILOCODE_BASE_URL: process.env.KILOCODE_BASE_URL,
+    KILOCODE_DEFAULT_CHAT_MODEL: process.env.KILOCODE_DEFAULT_CHAT_MODEL,
+    KILOCODE_DEFAULT_TRANSLATE_MODEL: process.env.KILOCODE_DEFAULT_TRANSLATE_MODEL,
     NODE_ENV: process.env.NODE_ENV,
     PORT: process.env.PORT || 3001
 });
+// Validate KiloCode configuration
+if (!process.env.KILOCODE_API_KEY) {
+    console.error('❌ KILOCODE_API_KEY not configured - server will not function properly');
+    process.exit(1);
+}
+else {
+    console.log('✅ [Kilocode] ready');
+}
 const server = (0, express_1.default)();
 const httpServer = http_1.default.createServer(server);
 // Initialize Socket.IO with enhanced configuration for Railway proxy
@@ -110,30 +86,8 @@ server.get('/api/health', (req, res) => {
         timestamp: new Date().toISOString(),
         websocketInitialized: !!webSocketService,
         translationServiceReady: true,
-        openRouterReady: !!process.env.OPENROUTER_API_KEY
+        kilocodeReady: !!process.env.KILOCODE_API_KEY
     });
-});
-server.get('/api/test-openrouter', async (req, res) => {
-    try {
-        const { OpenRouterAdapter } = await Promise.resolve().then(() => __importStar(require('./services/openrouterAdapter')));
-        const openRouterAdapter = new OpenRouterAdapter(process.env.OPENROUTER_API_KEY || '', process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1');
-        const testMessages = [{ role: 'user', content: 'test' }];
-        const options = { model: process.env.OPENROUTER_MODEL || 'gpt-4o-mini', timeout: 10000 };
-        const result = await openRouterAdapter.fetchCompletion(testMessages, options);
-        res.json({ status: 'success', response: result.substring(0, 100) });
-    }
-    catch (error) {
-        res.status(500).json({
-            status: 'error',
-            error: error?.message || 'Unknown error',
-            stack: error?.stack || 'No stack trace',
-            env: {
-                OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL,
-                OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? '[REDACTED]' : 'MISSING',
-                OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || 'gpt-4o-mini'
-            }
-        });
-    }
 });
 // Authenticated API routes (require valid Neon Auth JWT)
 server.use('/api/conversations', auth_2.neonAuthMiddleware, conversations_1.default);

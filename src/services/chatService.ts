@@ -1,5 +1,5 @@
 import { personaService } from './personaService';
-import { OpenRouterAdapter } from './openrouterAdapter';
+import { KilocodeAdapter } from './kilocodexAdapter';
 import { ILLMAdapter } from './llmAdapter';
 import {
   Persona,
@@ -146,7 +146,7 @@ export class ChatService {
       this.logResponseProcess(message_id, 'persona_selected', { persona: persona.displayName });
       
       // Determine model to use - from payload, DB, or default
-      let effectiveModel = model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+      let effectiveModel = model || process.env.KILOCODE_DEFAULT_CHAT_MODEL || 'kilocode-coder-2025';
       if (conversationId) {
         try {
           effectiveModel = await conversationService.getCurrentModel(conversationId);

@@ -1,7 +1,7 @@
 import { BaseLLMAdapter } from './llmAdapter';
 import { LLMMessage, DeltaChunk, LLMOptions } from '../types';
 
-export class OpenRouterAdapter extends BaseLLMAdapter {
+export class KilocodeAdapter extends BaseLLMAdapter {
   private activeRequests: Map<string, AbortController> = new Map();
   private activeStreams: Map<string, { reader: ReadableStreamDefaultReader<Uint8Array>; decoder: TextDecoder; controller: AbortController }> = new Map();
 
@@ -17,10 +17,10 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
     let response: Response | null = null;
 
     try {
-      // Log before OpenRouter call
-      console.log(`[OpenRouter] streamCompletion called for request ${requestId}`);
-      console.log(`[OpenRouter] API key present: ${!!this.apiKey ? `${this.apiKey.slice(0, 10)}...` : 'NO KEY'}`);
-      console.log(`[OpenRouter] Model: ${options.model}, Messages length: ${messages.length}`);
+      // Log before KiloCode call
+      console.log(`[Kilocode] streamCompletion called for request ${requestId}`);
+      console.log(`[Kilocode] API key present: ${!!this.apiKey ? `${this.apiKey.slice(0, 10)}...` : 'NO KEY'}`);
+      console.log(`[Kilocode] Model: ${options.model}, Messages length: ${messages.length}`);
 
       const body: any = {
         model: options.model,
@@ -38,10 +38,10 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
         body.response_format = options.responseFormat;
       }
 
-      console.log(`[OpenRouter] Fetching ${this.baseUrl}/chat/completions with model ${options.model} for request ${requestId}`);
+      console.log(`[Kilocode] Fetching ${this.baseUrl}/chat/completions with model ${options.model} for request ${requestId}`);
 
       const timeoutId = setTimeout(() => {
-        console.error(`[OpenRouter] Request ${requestId} timeout after 30s - aborting`);
+        console.error(`[Kilocode] Request ${requestId} timeout after 30s - aborting`);
         controller.abort();
       }, 30000); // 30s timeout
 
@@ -57,19 +57,19 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
 
       clearTimeout(timeoutId);
 
-      console.log(`[OpenRouter] Fetch response status: ${response.status} for request ${requestId}`);
+      console.log(`[Kilocode] Fetch response status: ${response.status} for request ${requestId}`);
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`[OpenRouter] API error ${response.status}: ${errorText} for request ${requestId}`);
-        throw new Error(`OpenRouter API error: ${response.status} ${errorText}`);
+        console.error(`[Kilocode] API error ${response.status}: ${errorText} for request ${requestId}`);
+        throw new Error(`KiloCode API error: ${response.status} ${errorText}`);
       }
 
       if (!response.body) {
         throw new Error('Response body is not readable');
       }
 
-      console.log(`[OpenRouter] Starting stream processing for request ${requestId}`);
+      console.log(`[Kilocode] Starting stream processing for request ${requestId}`);
 
       // Use proper streaming with native ReadableStream
       const reader = response.body.getReader();
@@ -85,7 +85,7 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
         while (true) {
           const { done, value } = await reader.read();
           if (done) {
-            console.log(`[OpenRouter] Stream complete for request ${requestId}, hasChunks: ${hasChunks}`);
+            console.log(`[Kilocode] Stream complete for request ${requestId}, hasChunks: ${hasChunks}`);
             yield { isFinal: true };
             break;
           }
@@ -103,7 +103,7 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
             if (line.startsWith('data: ')) {
               const data = line.slice(6);
               if (data === '[DONE]') {
-                console.log(`[OpenRouter] Stream ended with [DONE] for request ${requestId}`);
+                console.log(`[Kilocode] Stream ended with [DONE] for request ${requestId}`);
                 yield { isFinal: true };
                 return;
               }
@@ -114,7 +114,7 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
 
                 if (delta?.content) {
                   hasChunks = true;
-                  console.log(`[OpenRouter] Yielding chunk of length ${delta.content.length} for request ${requestId}`);
+                  console.log(`[Kilocode] Yielding chunk of length ${delta.content.length} for request ${requestId}`);
                   yield {
                     deltaText: delta.content,
                     isFinal: false,
@@ -125,7 +125,7 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
                   };
                 }
               } catch (parseError) {
-                console.warn(`[OpenRouter] Failed to parse line "${line}" for request ${requestId}:`, parseError);
+                console.warn(`[Kilocode] Failed to parse line "${line}" for request ${requestId}:`, parseError);
                 // Skip invalid JSON lines
               }
             }
@@ -134,8 +134,8 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
 
         // Check for no chunks after loop
         if (!hasChunks) {
-          console.error(`[OpenRouter] No chunks received for request ${requestId} - possible API issue or empty response`);
-          throw new Error('No response chunks received from OpenRouter');
+          console.error(`[Kilocode] No chunks received for request ${requestId} - possible API issue or empty response`);
+          throw new Error('No response chunks received from KiloCode');
         }
       } finally {
         // Ensure reader is always released
@@ -150,7 +150,7 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
         this.activeStreams.delete(requestId);
       }
     } catch (error: any) {
-      console.error(`[OpenRouter] StreamCompletion error for request ${requestId}:`, error);
+      console.error(`[Kilocode] StreamCompletion error for request ${requestId}:`, error);
       if (error.name === 'AbortError' || error.message.includes('aborted')) {
         console.log(`Request ${requestId} was cancelled`);
       } else {
@@ -173,9 +173,9 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
 
     try {
       // Similar logging for non-streaming
-      console.log(`[OpenRouter] fetchCompletion called for request ${requestId}`);
-      console.log(`[OpenRouter] API key present: ${!!this.apiKey ? `${this.apiKey.slice(0, 10)}...` : 'NO KEY'}`);
-      console.log(`[OpenRouter] Model: ${options.model}, Messages length: ${messages.length}`);
+      console.log(`[Kilocode] fetchCompletion called for request ${requestId}`);
+      console.log(`[Kilocode] API key present: ${!!this.apiKey ? `${this.apiKey.slice(0, 10)}...` : 'NO KEY'}`);
+      console.log(`[Kilocode] Model: ${options.model}, Messages length: ${messages.length}`);
 
       const body: any = {
         model: options.model,
@@ -193,11 +193,11 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
       }
 
       const timeoutId = setTimeout(() => {
-        console.error(`[OpenRouter] fetchCompletion timeout after 30s for request ${requestId} - aborting`);
+        console.error(`[Kilocode] fetchCompletion timeout after 30s for request ${requestId} - aborting`);
         controller.abort();
       }, 30000);
 
-      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      const response = await fetch(`${this.baseUrl}/translate`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,
@@ -209,19 +209,19 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
 
       clearTimeout(timeoutId);
 
-      console.log(`[OpenRouter] fetchCompletion response status: ${response.status} for request ${requestId}`);
+      console.log(`[Kilocode] fetchCompletion response status: ${response.status} for request ${requestId}`);
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`[OpenRouter] API error ${response.status}: ${errorText} for request ${requestId}`);
-        throw new Error(`OpenRouter API error: ${response.status} ${errorText}`);
+        console.error(`[Kilocode] API error ${response.status}: ${errorText} for request ${requestId}`);
+        throw new Error(`KiloCode API error: ${response.status} ${errorText}`);
       }
 
       const data: any = await response.json();
-      console.log(`[OpenRouter] fetchCompletion completed for request ${requestId}, content length: ${data.choices?.[0]?.message?.content?.length || 0}`);
-      return data.choices?.[0]?.message?.content || '';
+      console.log(`[Kilocode] fetchCompletion completed for request ${requestId}, content length: ${data.translated_text?.length || 0}`);
+      return data.translated_text || '';
     } catch (error: any) {
-      console.error(`[OpenRouter] fetchCompletion error for request ${requestId}:`, error);
+      console.error(`[Kilocode] fetchCompletion error for request ${requestId}:`, error);
       if (error.name === 'AbortError' || error.message.includes('aborted')) {
         console.log(`Request ${requestId} was cancelled`);
         return '';

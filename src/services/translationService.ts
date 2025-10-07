@@ -1,5 +1,5 @@
 import { LLMMessage, LLMOptions } from '../types';
-import { OpenRouterAdapter } from './openrouterAdapter';
+import { KilocodeAdapter } from './kilocodexAdapter';
 import { personaService } from './personaService';
 import { TranslationResponseSchema } from './translationSchema';
 
@@ -72,7 +72,7 @@ interface DictionaryEntry {
 }
 
 export class TranslationService {
-  private openRouterAdapter: OpenRouterAdapter;
+  private kilocodeAdapter: KilocodeAdapter;
   private cache: Map<string, { data: TranslationResponse; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 1000 * 60 * 30; // 30 minutes
   // New: version the schema/output format to safely bust stale cache entries
@@ -100,8 +100,8 @@ export class TranslationService {
     return asciiLike;
   }
 
-  constructor(openRouterAdapter: OpenRouterAdapter) {
-    this.openRouterAdapter = openRouterAdapter;
+  constructor(kilocodeAdapter: KilocodeAdapter) {
+    this.kilocodeAdapter = kilocodeAdapter;
     // Log env vars to verify loading
     console.log('TranslationService initialized with OPENROUTER_BASE_URL:', process.env.OPENROUTER_BASE_URL || 'DEFAULT (openrouter.ai)');
     console.log('OPENROUTER_MODEL:', process.env.OPENROUTER_MODEL || 'DEFAULT (gpt-4o-mini)');
@@ -396,7 +396,7 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
         temperature: 0.2
       };
 
-      const rawResult = await this.openRouterAdapter.fetchCompletion(messages, options);
+      const rawResult = await this.kilocodeAdapter.fetchCompletion(messages, options);
       const parsedResult = this.safeParseJson(rawResult);
       if (parsedResult.entry && (!parsedResult.entry.senses?.length)) {
         console.log('Retrying because entry has no senses');
@@ -464,7 +464,7 @@ Instructions:
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPromptExpanded }
         ];
-        const rawResult2 = await this.openRouterAdapter.fetchCompletion(retryMessages, options);
+        const rawResult2 = await this.kilocodeAdapter.fetchCompletion(retryMessages, options);
         const parsedResult2 = this.safeParseJson(rawResult2);
         const result2 = this.transformOpenRouterResponse(parsedResult2);
 
@@ -981,11 +981,11 @@ Instructions:
   }
 }
 
-// Singleton instance - now using OpenRouter exclusively
+// Singleton instance - now using KiloCode exclusively
 export const translationService = new TranslationService(
-  new OpenRouterAdapter(
-    process.env.OPENROUTER_API_KEY || '',
-    process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
+  new KilocodeAdapter(
+    process.env.KILOCODE_API_KEY || '',
+    process.env.KILOCODE_BASE_URL || 'https://api.kilocode.ai/v1'
   )
 );
 

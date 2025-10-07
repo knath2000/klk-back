@@ -29,12 +29,21 @@ dotenv.config();
 
 // Log environment variables for debugging
 console.log('🔧 Environment Variables:', {
-  LANGDB_GATEWAY_URL: process.env.LANGDB_GATEWAY_URL,
-  LANGDB_API_KEY: process.env.LANGDB_API_KEY ? '[REDACTED]' : 'MISSING',
-  LANGDB_TIMEOUT: process.env.LANGDB_TIMEOUT,
+  KILOCODE_API_KEY: process.env.KILOCODE_API_KEY ? '[REDACTED]' : 'MISSING',
+  KILOCODE_BASE_URL: process.env.KILOCODE_BASE_URL,
+  KILOCODE_DEFAULT_CHAT_MODEL: process.env.KILOCODE_DEFAULT_CHAT_MODEL,
+  KILOCODE_DEFAULT_TRANSLATE_MODEL: process.env.KILOCODE_DEFAULT_TRANSLATE_MODEL,
   NODE_ENV: process.env.NODE_ENV,
   PORT: process.env.PORT || 3001
 });
+
+// Validate KiloCode configuration
+if (!process.env.KILOCODE_API_KEY) {
+  console.error('❌ KILOCODE_API_KEY not configured - server will not function properly');
+  process.exit(1);
+} else {
+  console.log('✅ [Kilocode] ready');
+}
 
 const server = express();
 const httpServer = http.createServer(server);
@@ -89,34 +98,10 @@ server.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     websocketInitialized: !!webSocketService,
     translationServiceReady: true,
-    openRouterReady: !!process.env.OPENROUTER_API_KEY
+    kilocodeReady: !!process.env.KILOCODE_API_KEY
   });
 });
 
-server.get('/api/test-openrouter', async (req, res) => {
-  try {
-    const { OpenRouterAdapter } = await import('./services/openrouterAdapter');
-    const openRouterAdapter = new OpenRouterAdapter(
-      process.env.OPENROUTER_API_KEY || '',
-      process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
-    );
-    const testMessages: LLMMessage[] = [{ role: 'user', content: 'test' }];
-    const options = { model: process.env.OPENROUTER_MODEL || 'gpt-4o-mini', timeout: 10000 };
-    const result = await openRouterAdapter.fetchCompletion(testMessages, options);
-    res.json({ status: 'success', response: result.substring(0, 100) });
-  } catch (error: any) {
-    res.status(500).json({
-      status: 'error',
-      error: error?.message || 'Unknown error',
-      stack: error?.stack || 'No stack trace',
-      env: {
-        OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL,
-        OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? '[REDACTED]' : 'MISSING',
-        OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || 'gpt-4o-mini'
-      }
-    });
-  }
-});
 
 // Authenticated API routes (require valid Neon Auth JWT)
 server.use('/api/conversations', neonAuthMiddleware, conversationsRouter);

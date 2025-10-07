@@ -28,12 +28,11 @@ cp .env.example .env
 PORT=3001
 NODE_ENV=development
 
-# LangDB AI LLM Gateway
-LANGDB_GATEWAY_URL=https://your-langdb-gateway.example.com/v1/openrouter
-LANGDB_API_KEY=your_langdb_api_key_here
-
-# OpenRouter Model
-OPENROUTER_MODEL=openrouter/gemini-2.5-flash-lite
+# KiloCode AI LLM Gateway
+KILOCODE_API_KEY=your_kilocode_api_key
+KILOCODE_BASE_URL=https://api.kilocode.ai/v1
+KILOCODE_DEFAULT_CHAT_MODEL=kilocode-coder-2025
+KILOCODE_DEFAULT_TRANSLATE_MODEL=kilocode-translator-2025
 
 # Request Configuration
 REQUEST_TIMEOUT=30000
