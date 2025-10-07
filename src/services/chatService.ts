@@ -1,5 +1,5 @@
 import { personaService } from './personaService';
-import { KilocodeAdapter } from './kilocodexAdapter';
+import { OpenRouterAdapter } from './openrouterAdapter';
 import { ILLMAdapter } from './llmAdapter';
 import {
   Persona,

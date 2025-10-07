@@ -6,7 +6,7 @@ const conversationService_1 = require("./conversationService");
 const personaService_1 = require("./personaService");
 const collaborationService_1 = require("./collaborationService");
 const translationService_1 = require("./translationService");
-const kilocodexAdapter_1 = require("./kilocodexAdapter");
+const openrouterAdapter_1 = require("./openrouterAdapter");
 class WebSocketService {
     constructor(io) {
         this.users = new Map();
@@ -502,7 +502,7 @@ class WebSocketService {
                         return;
                     }
                     // Use KiloCode for chat
-                    const kilocodeAdapter = new kilocodexAdapter_1.KilocodeAdapter(process.env.KILOCODE_API_KEY || '', process.env.KILOCODE_BASE_URL || 'https://api.kilocode.ai/v1');
+                    const kilocodeAdapter = new openrouterAdapter_1.OpenRouterAdapter(process.env.KILOCODE_API_KEY || '', process.env.KILOCODE_BASE_URL || 'https://api.kilocode.ai/v1');
                     const options = {
                         model: effectiveModel,
                         timeout: 30000,

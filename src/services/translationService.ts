@@ -1,5 +1,5 @@
 import { LLMMessage, LLMOptions } from '../types';
-import { KilocodeAdapter } from './kilocodexAdapter';
+import { OpenRouterAdapter } from './openrouterAdapter';
 import { personaService } from './personaService';
 import { TranslationResponseSchema } from './translationSchema';
 
@@ -72,7 +72,7 @@ interface DictionaryEntry {
 }
 
 export class TranslationService {
-  private kilocodeAdapter: KilocodeAdapter;
+  private kilocodeAdapter: OpenRouterAdapter;
   private cache: Map<string, { data: TranslationResponse; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 1000 * 60 * 30; // 30 minutes
   // New: version the schema/output format to safely bust stale cache entries
@@ -100,7 +100,7 @@ export class TranslationService {
     return asciiLike;
   }
 
-  constructor(kilocodeAdapter: KilocodeAdapter) {
+  constructor(kilocodeAdapter: OpenRouterAdapter) {
     this.kilocodeAdapter = kilocodeAdapter;
     // Log env vars to verify loading
     console.log('TranslationService initialized with OPENROUTER_BASE_URL:', process.env.OPENROUTER_BASE_URL || 'DEFAULT (openrouter.ai)');
@@ -983,7 +983,7 @@ Instructions:
 
 // Singleton instance - now using KiloCode exclusively
 export const translationService = new TranslationService(
-  new KilocodeAdapter(
+  new OpenRouterAdapter(
     process.env.KILOCODE_API_KEY || '',
     process.env.KILOCODE_BASE_URL || 'https://api.kilocode.ai/v1'
   )

@@ -35,6 +35,12 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
                 body.response_format = options.responseFormat;
             }
             console.log(`[OpenRouter] Fetching ${this.baseUrl}/chat/completions with model ${options.model} for request ${requestId}`);
+            const fullUrl = `${this.baseUrl}/chat/completions`;
+            console.log(`[OpenRouter] Full request details for ${requestId}:`);
+            console.log(`  Method: POST`);
+            console.log(`  URL: ${fullUrl}`);
+            console.log(`  Headers: Authorization=Bearer ${this.apiKey ? '[REDACTED]' : 'MISSING'}, Content-Type=application/json`);
+            console.log(`  Body:`, JSON.stringify(body, null, 2));
             const timeoutId = setTimeout(() => {
                 console.error(`[OpenRouter] Request ${requestId} timeout after 30s - aborting`);
                 controller.abort();
@@ -174,7 +180,7 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
                 console.error(`[OpenRouter] fetchCompletion timeout after 30s for request ${requestId} - aborting`);
                 controller.abort();
             }, 30000);
-            const response = await fetch(`${this.baseUrl}/chat/completions`, {
+            const response = await fetch(`${this.baseUrl}/translate`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
@@ -191,8 +197,8 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
                 throw new Error(`OpenRouter API error: ${response.status} ${errorText}`);
             }
             const data = await response.json();
-            console.log(`[OpenRouter] fetchCompletion completed for request ${requestId}, content length: ${data.choices?.[0]?.message?.content?.length || 0}`);
-            return data.choices?.[0]?.message?.content || '';
+            console.log(`[OpenRouter] fetchCompletion completed for request ${requestId}, content length: ${data.translated_text?.length || 0}`);
+            return data.translated_text || '';
         }
         catch (error) {
             console.error(`[OpenRouter] fetchCompletion error for request ${requestId}:`, error);

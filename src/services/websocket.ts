@@ -7,7 +7,7 @@ import { conversationService } from './conversationService';
 import { personaService } from './personaService';
 import { collaborationService } from './collaborationService';
 import { translationService } from './translationService';
-import { KilocodeAdapter } from './kilocodexAdapter';
+import { OpenRouterAdapter } from './openrouterAdapter';
 import { LLMMessage, LLMOptions, DeltaChunk, UserMessagePayload } from '../types';
 
 interface WebSocketUser {
@@ -581,7 +581,7 @@ class WebSocketService {
           }
 
           // Use KiloCode for chat
-          const kilocodeAdapter = new KilocodeAdapter(
+          const kilocodeAdapter = new OpenRouterAdapter(
             process.env.KILOCODE_API_KEY || '',
             process.env.KILOCODE_BASE_URL || 'https://api.kilocode.ai/v1'
           );
