@@ -52,7 +52,7 @@ class WebSocketService {
     : undefined;
   private static EXPECTED_AUD = process.env.STACK_EXPECTED_AUD; // optional
   private static REQUIRE_AUTH = process.env.REQUIRE_AUTH === 'true';
-  private static ALLOW_GUEST_TRANSLATION = process.env.ALLOW_GUEST_TRANSLATION === 'true';
+  private static ALLOW_GUEST_TRANSLATION = process.env.ALLOW_GUEST_TRANSLATION !== 'false';
   
   constructor(io: Server) {
     this.io = io;
@@ -566,23 +566,23 @@ class WebSocketService {
             }
           }
           if (!effectiveModel) {
-            effectiveModel = process.env.KILOCODE_DEFAULT_CHAT_MODEL || 'kilocode-coder-2025';
+            effectiveModel = process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
             console.log(`🔁 Fallback to default model for request ${data.message_id}: ${effectiveModel}`);
           }
 
           console.log('[OpenRouter] Model:', effectiveModel, 'Messages length:', messages.length);
 
           // Check for API key before proceeding
-          if (!process.env.KILOCODE_API_KEY) {
-            const errorMsg = 'KiloCode API key not configured';
-            console.error(`[Kilocode] ${errorMsg}`);
+          if (!process.env.OPENROUTER_API_KEY) {
+            const errorMsg = 'OpenRouter API key not configured';
+            console.error(`[OpenRouter] ${errorMsg}`);
             socket.emit('llm_error', { message: errorMsg });
             return;
           }
 
-          const kilocodeAdapter = new OpenRouterAdapter(
-            process.env.KILOCODE_API_KEY || '',
-            process.env.KILOCODE_BASE_URL || 'https://api.kilocode.ai/v1'
+          const openRouterAdapter = new OpenRouterAdapter(
+            process.env.OPENROUTER_API_KEY || '',
+            process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
           );
 
           const options: LLMOptions = {
@@ -593,7 +593,7 @@ class WebSocketService {
 
           // Stream response with timeout wrapper
           const streamPromise = (async () => {
-            const stream = kilocodeAdapter.streamCompletion(messages, options);
+            const stream = openRouterAdapter.streamCompletion(messages, options);
             let fullContent = '';
             const assistantMessageId = this.generateMessageId();
 

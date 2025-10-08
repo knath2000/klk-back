@@ -28,11 +28,11 @@ cp .env.example .env
 PORT=3001
 NODE_ENV=development
 
-# KiloCode AI LLM Gateway
-OPENROUTER_API_KEY=your_kilocode_api_key
-OPENROUTER_BASE_URL=https://api.kilocode.ai/v1
-OPENROUTER_DEFAULT_CHAT_MODEL=kilocode-coder-2025
-OPENROUTER_DEFAULT_TRANSLATE_MODEL=kilocode-translator-2025
+# OpenRouter AI LLM Gateway
+OPENROUTER_API_KEY=your_openrouter_api_key
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=gpt-4o-mini
+OPENROUTER_TRANSLATE_MODEL=meta-llama/llama-4-maverick
 
 # Request Configuration
 REQUEST_TIMEOUT=30000
