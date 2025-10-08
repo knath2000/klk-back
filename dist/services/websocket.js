@@ -501,7 +501,6 @@ class WebSocketService {
                         socket.emit('llm_error', { message: errorMsg });
                         return;
                     }
-                    // Use KiloCode for chat
                     const kilocodeAdapter = new openrouterAdapter_1.OpenRouterAdapter(process.env.KILOCODE_API_KEY || '', process.env.KILOCODE_BASE_URL || 'https://api.kilocode.ai/v1');
                     const options = {
                         model: effectiveModel,

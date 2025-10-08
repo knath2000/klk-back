@@ -984,8 +984,8 @@ Instructions:
 // Singleton instance - now using KiloCode exclusively
 export const translationService = new TranslationService(
   new OpenRouterAdapter(
-    process.env.KILOCODE_API_KEY || '',
-    process.env.KILOCODE_BASE_URL || 'https://api.kilocode.ai/v1'
+    process.env.OPENROUTER_API_KEY || '',
+    process.env.OPENROUTER_BASE_URL || 'https://api.kilocode.ai/v1'
   )
 );
 

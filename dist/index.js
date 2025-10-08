@@ -25,16 +25,16 @@ const websocket_1 = require("./services/websocket");
 dotenv_1.default.config();
 // Log environment variables for debugging
 console.log('🔧 Environment Variables:', {
-    KILOCODE_API_KEY: process.env.KILOCODE_API_KEY ? '[REDACTED]' : 'MISSING',
-    KILOCODE_BASE_URL: process.env.KILOCODE_BASE_URL,
-    KILOCODE_DEFAULT_CHAT_MODEL: process.env.KILOCODE_DEFAULT_CHAT_MODEL,
-    KILOCODE_DEFAULT_TRANSLATE_MODEL: process.env.KILOCODE_DEFAULT_TRANSLATE_MODEL,
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? '[REDACTED]' : 'MISSING',
+    OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL,
+    OPENROUTER_DEFAULT_CHAT_MODEL: process.env.OPENROUTER_DEFAULT_CHAT_MODEL,
+    OPENROUTER_DEFAULT_TRANSLATE_MODEL: process.env.OPENROUTER_DEFAULT_TRANSLATE_MODEL,
     NODE_ENV: process.env.NODE_ENV,
     PORT: process.env.PORT || 3001
 });
-// Validate KiloCode configuration
-if (!process.env.KILOCODE_API_KEY) {
-    console.error('❌ KILOCODE_API_KEY not configured - server will not function properly');
+// Validate OpenRouter configuration
+if (!process.env.OPENROUTER_API_KEY) {
+    console.error('❌ OPENROUTER_API_KEY not configured - server will not function properly');
     process.exit(1);
 }
 else {
@@ -86,7 +86,7 @@ server.get('/api/health', (req, res) => {
         timestamp: new Date().toISOString(),
         websocketInitialized: !!webSocketService,
         translationServiceReady: true,
-        kilocodeReady: !!process.env.KILOCODE_API_KEY
+        kilocodeReady: !!process.env.OPENROUTER_API_KEY
     });
 });
 // Authenticated API routes (require valid Neon Auth JWT)

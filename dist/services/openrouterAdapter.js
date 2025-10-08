@@ -27,7 +27,7 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
             if (typeof options.temperature === 'number') {
                 body.temperature = options.temperature;
             }
-            // Prefer json_schema if provided, otherwise allow a raw response_format
+            // Prefers json_schema if provided, otherwise allow a raw response_format
             if (options.jsonSchema) {
                 body.response_format = { type: 'json_schema', json_schema: options.jsonSchema };
             }

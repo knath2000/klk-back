@@ -580,7 +580,6 @@ class WebSocketService {
             return;
           }
 
-          // Use KiloCode for chat
           const kilocodeAdapter = new OpenRouterAdapter(
             process.env.KILOCODE_API_KEY || '',
             process.env.KILOCODE_BASE_URL || 'https://api.kilocode.ai/v1'
