@@ -18,6 +18,7 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
             console.log(`[OpenRouter] streamCompletion called for request ${requestId}`);
             console.log(`[OpenRouter] API key present: ${!!this.apiKey ? `${this.apiKey.slice(0, 10)}...` : 'NO KEY'}`);
             console.log(`[OpenRouter] Model: ${options.model}, Messages length: ${messages.length}`);
+            // Validate model before proceeding
             const body = {
                 model: options.model,
                 messages,
@@ -110,6 +111,13 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
                                         }
                                     };
                                 }
+                                else if (delta && !delta.content) {
+                                    // Tolerate empty deltas but log them for debugging
+                                    console.log(`[OpenRouter] Empty delta received for request ${requestId} - tolerating`);
+                                }
+                                else if (!delta) {
+                                    console.log(`[OpenRouter] No delta in parsed response for request ${requestId} - skipping`);
+                                }
                             }
                             catch (parseError) {
                                 console.warn(`[OpenRouter] Failed to parse line "${line}" for request ${requestId}:`, parseError);
@@ -180,7 +188,7 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
                 console.error(`[OpenRouter] fetchCompletion timeout after 30s for request ${requestId} - aborting`);
                 controller.abort();
             }, 30000);
-            const response = await fetch(`${this.baseUrl}/translate`, {
+            const response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
@@ -197,8 +205,14 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
                 throw new Error(`OpenRouter API error: ${response.status} ${errorText}`);
             }
             const data = await response.json();
-            console.log(`[OpenRouter] fetchCompletion completed for request ${requestId}, content length: ${data.translated_text?.length || 0}`);
-            return data.translated_text || '';
+            const combinedContent = Array.isArray(data?.choices)
+                ? data.choices
+                    .map((choice) => choice?.message?.content ?? '')
+                    .join('')
+                    .trim()
+                : '';
+            console.log(`[OpenRouter] fetchCompletion completed for request ${requestId}, content length: ${combinedContent.length}`);
+            return combinedContent;
         }
         catch (error) {
             console.error(`[OpenRouter] fetchCompletion error for request ${requestId}:`, error);
@@ -212,7 +226,7 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
             }
         }
         finally {
-            //
+            this.activeRequests.delete(requestId);
         }
     }
     async cancel(requestId) {

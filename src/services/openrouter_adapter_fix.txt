@@ -1,0 +1,25 @@
+               try {
+                 const parsed = JSON.parse(data);
+                 const delta = parsed.choices?.[0]?.delta;
+
+                 if (delta?.content) {
+                   hasChunks = true;
+                   console.log(`[OpenRouter] Yielding chunk of length ${delta.content.length} for request ${requestId}`);
+                   yield {
+                     deltaText: delta.content,
+                     isFinal: false,
+                     meta: {
+                       usage: parsed.usage,
+                       requestId: parsed.id
+                     }
+                   };
+                 } else if (delta && !delta.content) {
+                   // Tolerate empty deltas but log them for debugging
+                   console.log(`[OpenRouter] Empty delta received for request ${requestId} - tolerating`);
+                 } else if (!delta) {
+                   console.log(`[OpenRouter] No delta in parsed response for request ${requestId} - skipping`);
+                 }
+               } catch (parseError) {
+                 console.warn(`[OpenRouter] Failed to parse line "${line}" for request ${requestId}:`, parseError);
+                 // Skip invalid JSON lines
+               }

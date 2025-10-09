@@ -492,6 +492,13 @@ class WebSocketService {
                     if (!effectiveModel) {
                         effectiveModel = process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
                         console.log(`🔁 Fallback to default model for request ${data.message_id}: ${effectiveModel}`);
+                        // Validate effectiveModel before proceeding
+                        if (!effectiveModel || effectiveModel.trim().length === 0) {
+                            const errorMsg = 'No valid model configured for LLM request';
+                            console.error(`[OpenRouter] ${errorMsg} - effectiveModel: "${effectiveModel}"`);
+                            socket.emit('llm_error', { message: errorMsg });
+                            return;
+                        }
                     }
                     console.log('[OpenRouter] Model:', effectiveModel, 'Messages length:', messages.length);
                     // Check for API key before proceeding
@@ -512,10 +519,6 @@ class WebSocketService {
                         const stream = openRouterAdapter.streamCompletion(messages, options);
                         let fullContent = '';
                         const assistantMessageId = this.generateMessageId();
-                        // Timeout for no chunks after 30s
-                        const timeoutPromise = new Promise((_, reject) => {
-                            setTimeout(() => reject(new Error('No response chunks received within 30s')), 30000);
-                        });
                         try {
                             for await (const chunk of stream) {
                                 if (chunk.deltaText) {
@@ -536,32 +539,73 @@ class WebSocketService {
                             throw streamError;
                         }
                     })();
-                    const { fullContent, assistantMessageId } = await Promise.race([
-                        streamPromise,
-                        new Promise((_, reject) => setTimeout(() => reject(new Error('Stream timeout')), 60000)) // Overall 60s timeout
-                    ]);
-                    console.log('[DEBUG] OpenRouter call completed');
-                    // Log after OpenRouter call
-                    console.log('[OpenRouter] streamCompletion completed, full content length:', fullContent.length);
-                    // Store assistant message if authenticated
+                    let finalContent = '';
+                    let finalAssistantMessageId = '';
+                    try {
+                        const { fullContent, assistantMessageId } = await Promise.race([
+                            streamPromise,
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('Stream timeout')), 60000)) // Overall 60s timeout
+                        ]);
+                        console.log('[DEBUG] OpenRouter call completed');
+                        console.log('[OpenRouter] streamCompletion completed, full content length:', fullContent.length);
+                        if (fullContent.length === 0) {
+                            console.log('[OpenRouter] No streamed chunks; invoking non-stream fallback');
+                            const fallbackContent = await openRouterAdapter.fetchCompletion(messages, options);
+                            if (fallbackContent.trim().length > 0) {
+                                finalContent = fallbackContent;
+                                finalAssistantMessageId = assistantMessageId;
+                            }
+                            else {
+                                socket.emit('llm_error', { message: 'No response generated from LLM' });
+                                return;
+                            }
+                        }
+                        else {
+                            finalContent = fullContent;
+                            finalAssistantMessageId = assistantMessageId;
+                        }
+                    }
+                    catch (streamError) {
+                        const streamErrorMessage = streamError instanceof Error ? streamError.message : String(streamError);
+                        console.error('[OpenRouter] Stream failed, attempting non-stream fallback:', streamErrorMessage);
+                        try {
+                            const fallbackContent = await openRouterAdapter.fetchCompletion(messages, options);
+                            if (fallbackContent.trim().length > 0) {
+                                finalContent = fallbackContent;
+                                finalAssistantMessageId = this.generateMessageId();
+                            }
+                            else {
+                                socket.emit('llm_error', { message: 'No response generated from LLM after fallback' });
+                                return;
+                            }
+                        }
+                        catch (fallbackError) {
+                            const fallbackErrorMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+                            console.error('[OpenRouter] Fallback also failed:', fallbackErrorMessage);
+                            socket.emit('llm_error', {
+                                message: 'LLM completely failed: ' + fallbackErrorMessage
+                            });
+                            return;
+                        }
+                    }
                     if (isAuthenticated) {
                         await conversationService_1.conversationService.addMessage({
                             conversation_id: resolvedConversationId,
                             role: 'assistant',
-                            content: fullContent,
+                            content: finalContent,
                             model: effectiveModel,
                             persona_id: data.selected_country_key,
                             tokens_used: undefined
                         });
-                        console.log(`💾 Stored assistant message ${assistantMessageId} in conversation ${resolvedConversationId}`);
+                        console.log(`💾 Stored assistant message ${finalAssistantMessageId} in conversation ${resolvedConversationId}`);
                     }
                     else {
                         console.log('[DEBUG] Unauthenticated, skipping assistant message storage');
                     }
                     // Emit final message
                     socket.emit('assistant_final', {
-                        message_id: assistantMessageId,
-                        final_content: fullContent,
+                        message_id: finalAssistantMessageId,
+                        final_content: finalContent,
                         timestamp: new Date().toISOString(),
                         conversationId
                     });
@@ -572,7 +616,7 @@ class WebSocketService {
                     console.log(`[DEBUG] Handler completed at ${new Date().toISOString()}, total time: ${Date.now() - startTime}ms`);
                     // Metrics
                     this.metrics.successes.inc();
-                    console.log('✅ User message processed for:', data.message_id, 'content length:', fullContent.length);
+                    console.log('✅ User message processed for:', data.message_id, 'content length:', finalContent.length);
                 }
                 catch (error) {
                     const endTime = Date.now();

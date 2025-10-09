@@ -31,8 +31,6 @@ dotenv.config();
 console.log('🔧 Environment Variables:', {
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? '[REDACTED]' : 'MISSING',
   OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL,
-  OPENROUTER_DEFAULT_CHAT_MODEL: process.env.OPENROUTER_DEFAULT_CHAT_MODEL,
-  OPENROUTER_DEFAULT_TRANSLATE_MODEL: process.env.OPENROUTER_DEFAULT_TRANSLATE_MODEL,
   NODE_ENV: process.env.NODE_ENV,
   PORT: process.env.PORT || 3001
 });
@@ -98,7 +96,7 @@ server.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     websocketInitialized: !!webSocketService,
     translationServiceReady: true,
-    kilocodeReady: !!process.env.OPENROUTER_API_KEY
+    openRouterReady: !!process.env.OPENROUTER_API_KEY
   });
 });
 

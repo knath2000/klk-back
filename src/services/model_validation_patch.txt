@@ -1,0 +1,7 @@
+// Validate effectiveModel before proceeding
+if (!effectiveModel || effectiveModel.trim().length === 0) {
+  const errorMsg = 'No valid model configured for LLM request';
+  console.error(`[OpenRouter] ${errorMsg} - effectiveModel: "${effectiveModel}"`);
+  socket.emit('llm_error', { message: errorMsg });
+  return;
+}

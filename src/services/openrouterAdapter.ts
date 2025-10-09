@@ -21,7 +21,7 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
       console.log(`[OpenRouter] streamCompletion called for request ${requestId}`);
       console.log(`[OpenRouter] API key present: ${!!this.apiKey ? `${this.apiKey.slice(0, 10)}...` : 'NO KEY'}`);
       console.log(`[OpenRouter] Model: ${options.model}, Messages length: ${messages.length}`);
-
+      // Validate model before proceeding
       const body: any = {
         model: options.model,
         messages,
@@ -130,6 +130,11 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
                       requestId: parsed.id
                     }
                   };
+                } else if (delta && !delta.content) {
+                  // Tolerate empty deltas but log them for debugging
+                  console.log(`[OpenRouter] Empty delta received for request ${requestId} - tolerating`);
+                } else if (!delta) {
+                  console.log(`[OpenRouter] No delta in parsed response for request ${requestId} - skipping`);
                 }
               } catch (parseError) {
                 console.warn(`[OpenRouter] Failed to parse line "${line}" for request ${requestId}:`, parseError);
@@ -204,7 +209,7 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
         controller.abort();
       }, 30000);
 
-      const response = await fetch(`${this.baseUrl}/translate`, {
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,
@@ -225,8 +230,16 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
       }
 
       const data: any = await response.json();
-      console.log(`[OpenRouter] fetchCompletion completed for request ${requestId}, content length: ${data.translated_text?.length || 0}`);
-      return data.translated_text || '';
+      const combinedContent = Array.isArray(data?.choices)
+        ? data.choices
+            .map((choice: any) => choice?.message?.content ?? '')
+            .join('')
+            .trim()
+        : '';
+      console.log(
+        `[OpenRouter] fetchCompletion completed for request ${requestId}, content length: ${combinedContent.length}`
+      );
+      return combinedContent;
     } catch (error: any) {
       console.error(`[OpenRouter] fetchCompletion error for request ${requestId}:`, error);
       if (error.name === 'AbortError' || error.message.includes('aborted')) {
@@ -237,7 +250,7 @@ export class OpenRouterAdapter extends BaseLLMAdapter {
         return '';
       }
     } finally {
-      //
+      this.activeRequests.delete(requestId);
     }
   }
 
