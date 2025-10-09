@@ -1,48 +1,166 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { translationService, TranslationRequest } from '../services/translationService';
 import { personaService } from '../services/personaService';
+import rateLimit, { RateLimitRequestHandler } from 'express-rate-limit';
 
-// Rate limiting store (in production, use Redis or similar)
-const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 minutes
-const RATE_LIMIT_MAX_REQUESTS = 100; // requests per window
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const GUEST_MAX_REQUESTS = 30;
+const AUTH_MAX_REQUESTS = 120;
+const MAX_BODY_BYTES = 8 * 1024; // 8KB payload limit for guests
+
+const guestLimiter: RateLimitRequestHandler = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: GUEST_MAX_REQUESTS,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => req.ip || req.connection.remoteAddress || 'unknown',
+  handler: (req: Request, res: Response) => {
+    res.status(429).json({
+      error: 'Too many requests',
+      message: 'Guest rate limit exceeded. Please wait a bit before trying again.',
+      retryAfter: res.getHeader('Retry-After') ?? Math.ceil(RATE_LIMIT_WINDOW_MS / 1000),
+    });
+  },
+});
+
+const authedLimiter: RateLimitRequestHandler = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: AUTH_MAX_REQUESTS,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => getRequestUserId(req) || req.ip || req.connection.remoteAddress || 'unknown',
+  handler: (req: Request, res: Response) => {
+    res.status(429).json({
+      error: 'Too many requests',
+      message: 'Rate limit exceeded. Please wait a moment and try again.',
+      retryAfter: res.getHeader('Retry-After') ?? Math.ceil(RATE_LIMIT_WINDOW_MS / 1000),
+    });
+  },
+});
+
+type CachedResponse = {
+  data: any;
+  expiresAt: number;
+};
+
+const guestCache = new Map<string, CachedResponse>();
+const GUEST_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 const router = express.Router();
 
-// Rate limiting middleware
-const rateLimit = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
-  const now = Date.now();
+function getRequestUserId(req: Request): string | null {
+  const user = (req as any).user;
+  if (user && typeof user.id === 'string') {
+    return user.id;
+  }
+  return null;
+}
 
-  // Clean up expired entries
-  for (const [ip, data] of rateLimitStore.entries()) {
-    if (now > data.resetTime) {
-      rateLimitStore.delete(ip);
+const selectLimiter = (req: Request, res: Response, next: NextFunction) => {
+  const userId = getRequestUserId(req);
+  const limiter = userId ? authedLimiter : guestLimiter;
+  limiter(req, res, next);
+};
+
+const translateHandler = async (req: Request, res: Response) => {
+  const requestUserId = getRequestUserId(req);
+  const isGuest = !requestUserId;
+
+  if (isGuest) {
+    try {
+      const bodySize = Buffer.byteLength(JSON.stringify(req.body || ''), 'utf8');
+      if (bodySize > MAX_BODY_BYTES) {
+        return res.status(413).json({
+          error: 'Request too large',
+          message: 'Guest translation payload exceeds 8KB limit.',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch {
+      // Ignore stringify errors; validation will handle malformed payloads
     }
   }
 
-  const clientData = rateLimitStore.get(clientIP);
-  if (!clientData) {
-    rateLimitStore.set(clientIP, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
-    return next();
-  }
+  try {
+    const validation = validateTranslationRequest(req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: validation.errors,
+        timestamp: new Date().toISOString()
+      });
+    }
 
-  if (now > clientData.resetTime) {
-    clientData.count = 1;
-    clientData.resetTime = now + RATE_LIMIT_WINDOW;
-    return next();
-  }
+    const { text, sourceLang, targetLang, context, userId }: TranslationRequest = req.body;
+    const effectiveUserId = userId ?? requestUserId ?? undefined;
 
-  if (clientData.count >= RATE_LIMIT_MAX_REQUESTS) {
-    return res.status(429).json({
-      error: 'Too many requests',
-      message: 'Rate limit exceeded. Please try again later.',
-      retryAfter: Math.ceil((clientData.resetTime - now) / 1000)
+    const request: TranslationRequest = {
+      text: text.trim(),
+      sourceLang,
+      targetLang,
+      context,
+      userId: effectiveUserId,
+    };
+
+    const cacheKey = isGuest ? `${request.text}_${request.sourceLang}_${request.targetLang}_${request.context || ''}` : null;
+    if (isGuest && cacheKey) {
+      const cached = guestCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        console.log(`♻️ Guest translation cache hit for "${request.text}"`);
+        return res.json({
+          ...cached.data,
+          metadata: {
+            ...(cached.data.metadata || {}),
+            cached: true,
+            requestId: cached.data.metadata?.requestId || `translate_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+          },
+        });
+      }
+      if (cached && cached.expiresAt <= Date.now()) {
+        guestCache.delete(cacheKey);
+      }
+    }
+
+    console.log(`🔄 Processing translation request: ${text.substring(0, 50)}... (${sourceLang}→${targetLang})`, {
+      guest: isGuest,
+      userId: effectiveUserId ?? null,
+    });
+
+    const result = await translationService.translate(request);
+
+    if (effectiveUserId) {
+      await translationService.saveTranslation(effectiveUserId, text.trim(), result);
+    }
+
+    const responseBody = {
+      ...result,
+      metadata: {
+        requestId: `translate_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        timestamp: new Date().toISOString(),
+        sourceLang,
+        targetLang,
+        context: context || null,
+        cached: false
+      }
+    };
+
+    if (isGuest && cacheKey) {
+      guestCache.set(cacheKey, {
+        data: responseBody,
+        expiresAt: Date.now() + GUEST_CACHE_TTL_MS,
+      });
+    }
+
+    return res.json(responseBody);
+  } catch (error) {
+    console.error('Translation API error:', error, { guest: isGuest, userId: requestUserId ?? null });
+    return res.status(500).json({
+      error: 'Translation failed',
+      message: error instanceof Error ? error.message : 'Unknown error',
+      timestamp: new Date().toISOString(),
+      requestId: `error_${Date.now()}`
     });
   }
-
-  clientData.count++;
-  next();
 };
 
 // Enhanced input validation
@@ -101,7 +219,7 @@ const validateTranslationRequest = (body: any): { isValid: boolean; errors: stri
 };
 
 // Request logging middleware
-const logRequest = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+const logRequest = (req: Request, res: Response, next: NextFunction) => {
   const startTime = Date.now();
   const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
 
@@ -130,64 +248,11 @@ const logRequest = (req: express.Request, res: express.Response, next: express.N
 };
 
 // POST /api/translate - Translate text with structured response
-router.post('/', logRequest, rateLimit, async (req, res) => {
-  try {
-    // Enhanced validation
-    const validation = validateTranslationRequest(req.body);
-    if (!validation.isValid) {
-      return res.status(400).json({
-        error: 'Validation failed',
-        details: validation.errors,
-        timestamp: new Date().toISOString()
-      });
-    }
-
-    const { text, sourceLang, targetLang, context, userId }: TranslationRequest = req.body;
-
-    const request: TranslationRequest = {
-      text: text.trim(),
-      sourceLang,
-      targetLang,
-      context,
-      userId
-    };
-
-    console.log(`🔄 Processing translation request: ${text.substring(0, 50)}... (${sourceLang}→${targetLang})`);
-
-    const result = await translationService.translate(request);
-
-    // Save to history if userId provided
-    if (userId) {
-      await translationService.saveTranslation(userId, text.trim(), result);
-    }
-
-    // Add metadata to response
-    const response = {
-      ...result,
-      metadata: {
-        requestId: `translate_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        timestamp: new Date().toISOString(),
-        sourceLang,
-        targetLang,
-        context: context || null,
-        cached: false // TODO: Add cache hit detection
-      }
-    };
-
-    res.json(response);
-  } catch (error) {
-    console.error('Translation API error:', error);
-    res.status(500).json({
-      error: 'Translation failed',
-      message: error instanceof Error ? error.message : 'Unknown error',
-      timestamp: new Date().toISOString(),
-      requestId: `error_${Date.now()}`
-    });
-  }
-});
+router.post('/', logRequest, selectLimiter, translateHandler);
+router.post('/request', logRequest, selectLimiter, translateHandler);
 
 // GET /api/translate/history/:userId - Get translation history
-router.get('/history/:userId', logRequest, rateLimit, async (req, res) => {
+router.get('/history/:userId', logRequest, selectLimiter, async (req, res) => {
   try {
     const { userId } = req.params;
     const { limit = '50', offset = '0' } = req.query;
@@ -257,8 +322,9 @@ router.get('/supported-languages', logRequest, (req, res) => {
     },
     limits: {
       maxTextLength: 1000,
-      rateLimitRequests: RATE_LIMIT_MAX_REQUESTS,
-      rateLimitWindowMinutes: RATE_LIMIT_WINDOW / (60 * 1000)
+      guestRateLimitRequests: GUEST_MAX_REQUESTS,
+      authedRateLimitRequests: AUTH_MAX_REQUESTS,
+      rateLimitWindowMinutes: RATE_LIMIT_WINDOW_MS / (60 * 1000)
     },
     timestamp: new Date().toISOString()
   });
@@ -287,8 +353,9 @@ router.get('/health', logRequest, (req, res) => {
     },
     rate_limiting: {
       enabled: true,
-      max_requests: RATE_LIMIT_MAX_REQUESTS,
-      window_minutes: RATE_LIMIT_WINDOW / (60 * 1000)
+      guest_max_requests: GUEST_MAX_REQUESTS,
+      authed_max_requests: AUTH_MAX_REQUESTS,
+      window_minutes: RATE_LIMIT_WINDOW_MS / (60 * 1000)
     }
   });
 });
@@ -304,8 +371,9 @@ router.get('/stats', logRequest, (req, res) => {
     metrics,
     cache: cacheStats,
     rate_limiting: {
-      active_clients: rateLimitStore.size,
-      window_minutes: RATE_LIMIT_WINDOW / (60 * 1000)
+      window_minutes: RATE_LIMIT_WINDOW_MS / (60 * 1000),
+      guest_max_requests: GUEST_MAX_REQUESTS,
+      authed_max_requests: AUTH_MAX_REQUESTS
     }
   });
 });

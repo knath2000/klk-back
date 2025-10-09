@@ -20,7 +20,7 @@ import authRouter from './routes/auth';
 
 // Import services
 import { getSupabase } from './services/db';
-import { neonAuthMiddleware } from './middleware/auth';
+import { neonAuthMiddleware, optionalNeonAuthMiddleware } from './middleware/auth';
 import { collaborationService } from './services/collaborationService';
 import { initializeWebSocket } from './services/websocket';
 import { translationService } from './services/translationService';
@@ -108,7 +108,7 @@ server.use('/api/search', neonAuthMiddleware, searchRouter);
 server.use('/api/teams', neonAuthMiddleware, teamsRouter);
 server.use('/api/analytics', neonAuthMiddleware, analyticsRouter);
 server.use('/api/collaboration', neonAuthMiddleware, collaborationRouter);
-server.use('/api/translate', neonAuthMiddleware, translateRouter);
+server.use('/api/translate', optionalNeonAuthMiddleware, translateRouter);
 
 // Public/Auth routes (Logout should be here)
 server.use('/api/auth', authRouter);

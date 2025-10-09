@@ -90,3 +90,48 @@ export async function neonAuthMiddleware(req: Request, res: Response, next: Next
     });
   }
 }
+
+/**
+ * Optional variant of Neon/Stack auth middleware.
+ * - Attempts to validate Authorization header if present.
+ * - Attaches req.user on success.
+ * - Silently continues when auth is missing or invalid (logs in development).
+ */
+export async function optionalNeonAuthMiddleware(req: Request, res: Response, next: NextFunction) {
+  if (!JWKS || !EXPECTED_ISSUER) {
+    return next();
+  }
+
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+
+  if (!token) {
+    return next();
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS, {
+      issuer: EXPECTED_ISSUER,
+      audience: EXPECTED_AUDIENCE,
+    });
+
+    const sub = String(payload.sub || '');
+    if (!sub) {
+      return next();
+    }
+
+    (req as any).user = {
+      id: sub,
+      sub,
+      email: (payload as JWTPayload & { email?: string }).email,
+      name: (payload as JWTPayload & { name?: string }).name,
+      claims: payload,
+    };
+  } catch (e: any) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[optionalNeonAuthMiddleware] Token verification failed:', e?.message);
+    }
+  }
+
+  return next();
+}
