@@ -51,11 +51,20 @@ class WebSocketService {
       )
     : undefined;
   private static EXPECTED_AUD = process.env.STACK_EXPECTED_AUD; // optional
-  private static REQUIRE_AUTH = process.env.REQUIRE_AUTH === 'true';
-  private static ALLOW_GUEST_TRANSLATION = process.env.ALLOW_GUEST_TRANSLATION !== 'false';
+  private static REQUIRE_AUTH =
+    process.env.REQUIRE_AUTH === 'true' ||
+    (!process.env.REQUIRE_AUTH && process.env.NODE_ENV === 'production');
+  private static ALLOW_GUEST_TRANSLATION =
+    process.env.ALLOW_GUEST_TRANSLATION === 'true';
   
   constructor(io: Server) {
     this.io = io;
+    console.log('[WebSocketService] Auth configuration', {
+      requireAuth: WebSocketService.REQUIRE_AUTH,
+      allowGuestTranslation: WebSocketService.ALLOW_GUEST_TRANSLATION,
+      stackProjectId: WebSocketService.STACK_PROJECT_ID || 'unset',
+      expectedIssuer: WebSocketService.EXPECTED_ISSUER || 'unset',
+    });
     // Socket.IO auth middleware (JWT via Neon/Stack Auth). Optional gating with REQUIRE_AUTH.
     this.io.use(async (socket, next) => {
       try {
@@ -787,6 +796,18 @@ try {
       // Create conversation handler
       socket.on('create_conversation', async (data: { title?: string; persona_id?: string }) => {
         const userId = (socket as any).user?.sub;
+        const handshakeAuth = socket.handshake?.auth ?? {};
+        const tokenPreview =
+          handshakeAuth && typeof handshakeAuth.token === 'string'
+            ? `${handshakeAuth.token.slice(0, 10)}…`
+            : null;
+        console.log('[WebSocket] create_conversation', {
+          socketId: socket.id,
+          hasUser: Boolean(userId),
+          requireAuth: WebSocketService.REQUIRE_AUTH,
+          tokenPresent: Boolean(handshakeAuth?.token),
+          tokenPreview,
+        });
         if (!userId) {
           console.log('❌ Create conversation: Authentication required');
           socket.emit('error', { message: 'Authentication required to create conversation' });
