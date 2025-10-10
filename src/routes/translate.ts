@@ -1,4 +1,5 @@
 import express, { Request, Response, NextFunction } from 'express';
+import { randomUUID } from 'crypto';
 import { translationService, TranslationRequest } from '../services/translationService';
 import { personaService } from '../services/personaService';
 import rateLimit, { RateLimitRequestHandler } from 'express-rate-limit';
@@ -66,6 +67,31 @@ const translateHandler = async (req: Request, res: Response) => {
   const requestUserId = getRequestUserId(req);
   const isGuest = !requestUserId;
 
+  // Ensure anon_id cookie for guests so we can persist guest translations with a stable id
+  let anonId: string | undefined = undefined;
+  try {
+    anonId = req.cookies?.anon_id;
+  } catch {
+    anonId = undefined;
+  }
+
+  if (!requestUserId && !anonId) {
+    // Generate a stable anon id for the guest and set it as a secure, httpOnly cookie
+    try {
+      anonId = randomUUID();
+      res.cookie('anon_id', anonId, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 180 * 24 * 60 * 60 * 1000, // 180 days
+      });
+      console.log('🔑 Assigned anon_id cookie for guest:', anonId);
+    } catch (err) {
+      console.warn('Failed to set anon_id cookie for guest:', err);
+      anonId = undefined;
+    }
+  }
+
   if (isGuest) {
     try {
       const bodySize = Buffer.byteLength(JSON.stringify(req.body || ''), 'utf8');
@@ -92,7 +118,8 @@ const translateHandler = async (req: Request, res: Response) => {
     }
 
     const { text, sourceLang, targetLang, context, userId }: TranslationRequest = req.body;
-    const effectiveUserId = userId ?? requestUserId ?? undefined;
+    // Effective user id: prefer explicit userId from body, then authenticated request user, then anonId for guests
+    const effectiveUserId = (userId && String(userId).trim()) || requestUserId || anonId || undefined;
 
     const request: TranslationRequest = {
       text: text.trim(),
@@ -128,9 +155,13 @@ const translateHandler = async (req: Request, res: Response) => {
 
     const result = await translationService.translate(request);
 
+    // Persist the translation for both authenticated users and guests (effectively keyed by anon_id)
     if (effectiveUserId) {
-      // Persist the translation with explicit source/target languages for correct deduping
-      await translationService.saveTranslation(effectiveUserId, text.trim(), result, sourceLang, targetLang);
+      try {
+        await translationService.saveTranslation(effectiveUserId, text.trim(), result, sourceLang, targetLang);
+      } catch (persistErr) {
+        console.warn('Failed to persist translation (REST):', persistErr);
+      }
     }
 
     const responseBody = {
