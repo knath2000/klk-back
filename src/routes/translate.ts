@@ -129,7 +129,8 @@ const translateHandler = async (req: Request, res: Response) => {
     const result = await translationService.translate(request);
 
     if (effectiveUserId) {
-      await translationService.saveTranslation(effectiveUserId, text.trim(), result);
+      // Persist the translation with explicit source/target languages for correct deduping
+      await translationService.saveTranslation(effectiveUserId, text.trim(), result, sourceLang, targetLang);
     }
 
     const responseBody = {

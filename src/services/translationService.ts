@@ -2,6 +2,7 @@ import { LLMMessage, LLMOptions } from '../types';
 import { OpenRouterAdapter } from './openrouterAdapter';
 import { personaService } from './personaService';
 import { TranslationResponseSchema } from './translationSchema';
+import { PrismaClient } from '@prisma/client';
 
 export interface TranslationRequest {
   text: string;
@@ -82,6 +83,8 @@ export class TranslationService {
     successes: { count: 0, inc: () => this.metrics.successes.count++ },
     errors: { count: 0, inc: () => this.metrics.errors.count++ }
   };
+  // Prisma client for NeonDB (translations persistence)
+  private prisma = new PrismaClient();
 
   /**
    * Heuristic to detect likely English headwords to trigger EN→ES directives.
@@ -780,9 +783,92 @@ Instructions:
     return [];
   }
 
-  async saveTranslation(userId: string, query: string, response: TranslationResponse): Promise<void> {
-    // TODO: Implement database storage
-    console.log(`Saving translation for user ${userId}: ${query}`);
+  /**
+   * Normalize query string for deduplication: trim + collapse whitespace.
+   */
+  private normalizeQuery(q: string): string {
+    if (!q) return q;
+    return q.trim().replace(/\s+/g, ' ');
+  }
+
+  /**
+   * Stable stringify: deterministically sort object keys and stringify so
+   * equivalent responses produce identical strings for deduplication.
+   */
+  private stableStringify(value: any): string {
+    const sorter = (obj: any): any => {
+      if (obj === null || obj === undefined) return obj;
+      if (Array.isArray(obj)) return obj.map(sorter);
+      if (typeof obj === 'object') {
+        const out: any = {};
+        Object.keys(obj).sort().forEach((k) => {
+          out[k] = sorter(obj[k]);
+        });
+        return out;
+      }
+      return obj;
+    };
+    try {
+      return JSON.stringify(sorter(value));
+    } catch (e) {
+      // Fallback to naive stringify
+      return JSON.stringify(value);
+    }
+  }
+
+  /**
+   * Persist a translation result for an authenticated user with deduplication.
+   * Deduplication policy: user_id + normalized query + language pair + stableStringify(response)
+   */
+  async saveTranslation(userId: string, query: string, response: TranslationResponse, sourceLang?: string, targetLang?: string): Promise<void> {
+    if (!userId) {
+      console.warn('saveTranslation skipped: no userId provided');
+      return;
+    }
+
+    const languagePair = `${(sourceLang || 'auto').trim()}->${(targetLang || 'es').trim()}`;
+    const normalizedQuery = this.normalizeQuery(query || '');
+    const normalizedTranslation = this.stableStringify(response || {});
+
+    try {
+      // Ensure user exists (avoid FK failures). Upsert with safe fallback email if required.
+      await this.prisma.user.upsert({
+        where: { id: userId },
+        update: { updated_at: new Date(), email: this.prisma ? undefined : undefined } as any,
+        create: { id: userId, email: `user-${userId}@local`, created_at: new Date(), updated_at: new Date() } as any
+      }).catch(() => { /* ignore upsert errors; user likely exists */ });
+
+      // Dedup check
+      const existing = await this.prisma.translation.findFirst({
+        where: {
+          user_id: userId,
+          query: normalizedQuery,
+          language: languagePair,
+          translation: normalizedTranslation
+        },
+        select: { id: true }
+      });
+
+      if (existing) {
+        console.log(`🔁 Skipping saveTranslation: duplicate found for user ${userId}, query: "${normalizedQuery}"`);
+        return;
+      }
+
+      // Create translation row
+      await this.prisma.translation.create({
+        data: {
+          user_id: userId,
+          query: normalizedQuery,
+          translation: normalizedTranslation,
+          language: languagePair
+        }
+      });
+
+      console.log(`✅ Saved translation for user ${userId}, query: "${normalizedQuery}"`);
+    } catch (err: any) {
+      console.error('❌ Failed to persist translation:', err?.message || err);
+      // Do not throw — persistence should be best-effort
+    }
   }
 
   private generateCacheKey(request: TranslationRequest): string {

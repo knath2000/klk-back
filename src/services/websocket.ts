@@ -341,9 +341,19 @@ class WebSocketService {
                 socket.emit('translation_delta', { chunk, index, total: chunks.length, id: frontendResult.id });
               }, index * 100); // 100ms delay per chunk
             });
-            setTimeout(() => {
+            setTimeout(async () => {
               console.log('📤 Emitting translation_final for:', frontendResult.id, 'to socket:', socket.id);
               socket.emit('translation_final', frontendResult);
+
+              // Persist translation for authenticated users (best-effort)
+              try {
+                const persistUserId = (socket as any).user?.sub || socket.id;
+                if (isAuthenticated && persistUserId) {
+                  await translationService.saveTranslation(persistUserId, data.query.trim(), result, data.language || 'en', 'es');
+                }
+              } catch (persistErr) {
+                console.warn('Failed to persist translation (websocket):', persistErr);
+              }
             }, chunks.length * 100 + 500);
           } else {
             // Polling-friendly: Send full result
