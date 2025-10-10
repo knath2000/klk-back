@@ -274,7 +274,50 @@ class WebSocketService {
            let result;
            try {
              const authedUserId = (socket as any).user?.sub || socket.id;
-             
+
+             // 1) Try a DB cache lookup (global, user-agnostic). If found, emit immediately and skip LLM.
+             try {
+               const cached = await translationService.findCachedTranslation(
+                 data.query,
+                 data.language || 'en',
+                 'es'
+               );
+               if (cached) {
+                 console.log('🗃️ WebSocket cache hit for query:', data.query);
+                 const frontendResult = {
+                   id: this.generateMessageId(),
+                   query: data.query,
+                   definitions: cached.definitions || [],
+                   examples: cached.examples || [],
+                   conjugations: cached.conjugations || {},
+                   audio: (cached.audio as any) || undefined,
+                   related: cached.related || undefined,
+                   entry: cached.entry || undefined,
+                   timestamp: Date.now()
+                 };
+
+                 // Emit final directly from cache
+                 socket.emit('translation_final', frontendResult);
+                 // Count as success (we returned a result)
+                 this.metrics.successes.inc();
+                 console.log('🗃️ Emitted cached translation for:', data.query);
+                 // Persist for authenticated users (best-effort) - still record that this user requested it
+                 try {
+                   if (isAuthenticated && authedUserId) {
+                     await translationService.saveTranslation(authedUserId, data.query.trim(), cached, data.language || 'en', 'es');
+                   }
+                 } catch (persistErr) {
+                   console.warn('Failed to persist cached translation (websocket):', persistErr);
+                 }
+                 return;
+               } else {
+                 console.log('🗃️ Cache miss for query:', data.query);
+               }
+             } catch (cacheErr) {
+               console.warn('🗃️ Cache lookup error (continuing to LLM):', cacheErr);
+             }
+
+             // 2) Cache miss -> call translation service (with retries)
              // Retry function with exponential backoff
              const attempt = async (tries = 0) => {
                try {
@@ -297,7 +340,7 @@ class WebSocketService {
                  throw err;
                }
              };
-             
+
              result = await attempt();
              console.log('✅ Translation service returned result for:', data.query, 'keys:', Object.keys(result));
            } catch (translationError: any) {

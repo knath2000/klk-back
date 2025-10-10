@@ -85,6 +85,77 @@ export class TranslationService {
   };
   // Prisma client for NeonDB (translations persistence)
   private prisma = new PrismaClient();
+  
+  // Cache metrics (hit/miss/errors)
+  private cacheMetrics = {
+    cacheHits: 0,
+    cacheMisses: 0,
+    cacheErrors: 0
+  };
+
+  /**
+   * Normalize language identifiers into 2-letter codes used across the service.
+   * Accepts: "es", "en", "spanish", "english", etc. Falls back to "en".
+   */
+  private normalizeLangCode(lang?: string | null): string {
+    if (!lang) return 'en';
+    const v = String(lang).trim().toLowerCase();
+    if (v === 'es' || v === 'en') return v;
+    if (v.includes('span')) return 'es';
+    if (v.includes('eng')) return 'en';
+    // last resort: take first two letters if alphabetic
+    const firstTwo = v.replace(/[^a-z]/g, '').slice(0, 2);
+    return firstTwo.length === 2 ? firstTwo : 'en';
+  }
+
+  /**
+   * Build a language pair key used for storage & lookup, e.g. "en->es"
+   */
+  private languagePair(sourceLang?: string | null, targetLang?: string | null): string {
+    const s = this.normalizeLangCode(sourceLang);
+    const t = this.normalizeLangCode(targetLang);
+    return `${s}->${t}`;
+  }
+
+  /**
+   * Look up a cached translation in the DB by normalized query + language pair.
+   * Returns the parsed translation object if found and parseable, or null otherwise.
+   * This is user-agnostic (global cache).
+   */
+  async findCachedTranslation(query: string, sourceLang?: string | null, targetLang?: string | null): Promise<any | null> {
+    try {
+      const normalizedQuery = this.normalizeQuery(query || '');
+      const langKey = this.languagePair(sourceLang, targetLang);
+
+      const row = await this.prisma.translation.findFirst({
+        where: {
+          query: normalizedQuery,
+          language: langKey
+        },
+        orderBy: { created_at: 'desc' },
+        select: { translation: true, created_at: true }
+      });
+
+      if (!row) {
+        this.cacheMetrics.cacheMisses++;
+        return null;
+      }
+
+      try {
+        const parsed = JSON.parse(row.translation);
+        this.cacheMetrics.cacheHits++;
+        return parsed;
+      } catch (parseErr) {
+        this.cacheMetrics.cacheErrors++;
+        console.warn('Failed to parse cached translation JSON:', parseErr);
+        return null;
+      }
+    } catch (err: any) {
+      this.cacheMetrics.cacheErrors++;
+      console.error('Cache lookup failed:', err?.message || err);
+      return null;
+    }
+  }
 
   /**
    * Heuristic to detect likely English headwords to trigger EN→ES directives.

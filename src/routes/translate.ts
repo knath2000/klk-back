@@ -129,6 +129,29 @@ const translateHandler = async (req: Request, res: Response) => {
       userId: effectiveUserId,
     };
 
+    // Check DB cache for existing translation (global, user-agnostic) before invoking LLM
+    try {
+      const cached = await translationService.findCachedTranslation(request.text, request.sourceLang, request.targetLang);
+      if (cached) {
+        console.log('🗃️ Cache hit for translation:', request.text, 'lang:', request.sourceLang, '->', request.targetLang);
+        const responseBody = {
+          ...cached,
+          metadata: {
+            requestId: `cache_${Date.now()}_${Math.random().toString(36).substr(2,9)}`,
+            timestamp: new Date().toISOString(),
+            sourceLang,
+            targetLang,
+            context: context || null,
+            cached: true
+          }
+        };
+        return res.json(responseBody);
+      }
+    } catch (cacheErr) {
+      console.warn('Cache lookup failed (continuing to LLM):', cacheErr);
+      // continue to LLM
+    }
+
     const cacheKey = isGuest ? `${request.text}_${request.sourceLang}_${request.targetLang}_${request.context || ''}` : null;
     if (isGuest && cacheKey) {
       const cached = guestCache.get(cacheKey);
