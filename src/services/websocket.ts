@@ -614,7 +614,23 @@ class WebSocketService {
           // Determine effective model with strict precedence
           let effectiveModel: string | undefined;
           if (data.model) {
-            effectiveModel = data.model;
+            // Defensive normalization: map legacy meta-llama slugs to new Google slugs,
+            // and treat 'default' as the environment-configured default.
+            const legacyToNewModelMap: Record<string, string> = {
+              'meta-llama/llama-3.2-3b-instruct': 'google/gemma-3-27b-it',
+              'meta-llama/llama-3.3-8b-instruct:free': 'google/gemini-2.5-flash-lite',
+              'meta-llama/llama-3.3-70b-instruct': 'google/gemini-2.5-flash'
+            };
+
+            let payloadModel = String(data.model || '').trim();
+            if (!payloadModel || payloadModel.toLowerCase() === 'default') {
+              payloadModel = process.env.OPENROUTER_MODEL || 'google/gemma-3-27b-it';
+            } else if (legacyToNewModelMap[payloadModel]) {
+              payloadModel = legacyToNewModelMap[payloadModel];
+              console.log(`[Model Normalization] Remapped legacy payload model to ${payloadModel}`);
+            }
+
+            effectiveModel = payloadModel;
             console.log(`🧠 Using payload-selected model for request ${data.message_id}: ${effectiveModel}`);
           } else if (isAuthenticated && conversationId) {
             try {
