@@ -628,15 +628,16 @@ class WebSocketService {
             }
           }
           if (!effectiveModel) {
-            effectiveModel = process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+            // Use the new default Google Gemma model when no model is resolved
+            effectiveModel = process.env.OPENROUTER_MODEL || 'google/gemma-3-27b-it';
             console.log(`🔁 Fallback to default model for request ${data.message_id}: ${effectiveModel}`);
-// Validate effectiveModel before proceeding
-if (!effectiveModel || effectiveModel.trim().length === 0) {
-  const errorMsg = 'No valid model configured for LLM request';
-  console.error(`[OpenRouter] ${errorMsg} - effectiveModel: "${effectiveModel}"`);
-  socket.emit('llm_error', { message: errorMsg });
-  return;
-}
+            // Validate effectiveModel before proceeding
+            if (!effectiveModel || effectiveModel.trim().length === 0) {
+              const errorMsg = 'No valid model configured for LLM request';
+              console.error(`[OpenRouter] ${errorMsg} - effectiveModel: "${effectiveModel}"`);
+              socket.emit('llm_error', { message: errorMsg });
+              return;
+            }
           }
 
           console.log('[OpenRouter] Model:', effectiveModel, 'Messages length:', messages.length);

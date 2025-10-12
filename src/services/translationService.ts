@@ -457,7 +457,7 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
       const effectiveModel =
         process.env.OPENROUTER_TRANSLATE_MODEL ||
         process.env.OPENROUTER_MODEL ||
-        'meta-llama/llama-4-maverick';
+        'google/gemini-2.5-flash-lite';
 
       console.log('🧠 Translation effective model:', effectiveModel);
 
