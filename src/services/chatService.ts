@@ -39,7 +39,7 @@ export class ChatService {
       score += 1;
     }
 
-    // Check for meaningful content (not just punctuation or single words)
+    // Checks for meaningful content (not just punctuation or single words)
     const meaningfulWords = response.trim().split(/\s+/).filter(word => word.length > 2);
     if (meaningfulWords.length < 2) {
       issues.push('Insufficient meaningful content');
