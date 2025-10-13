@@ -629,40 +629,86 @@ Instructions:
     if (!raw || typeof raw !== 'string') {
       throw new Error('Empty or non-string completion from provider');
     }
-    // 1) Strip common markdown code fences
+
+    // Preserve original for debug logging
+    const original = raw;
+    console.log(`[TranslationService] safeParseJson original length: ${original.length}`);
+
+    // 1) Strip common markdown code fences and obvious wrappers
     let s = raw.trim()
       .replace(/^\s*```json\s*/i, '')
       .replace(/^\s*```\s*/i, '')
       .replace(/\s*```$/i, '')
       .trim();
-    // 2) Extract the outermost JSON object braces
+
+    // 2) Extract the outermost JSON object braces if present
     const firstBrace = s.indexOf('{');
     const lastBrace = s.lastIndexOf('}');
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
       s = s.slice(firstBrace, lastBrace + 1);
     }
-    // 3) Attempt parse
+
+    // 3) First parse attempt (fast path)
     try {
-      return JSON.parse(s);
+      const parsed = JSON.parse(s);
+      return parsed;
     } catch (e1) {
-      // 4) Lightweight repairs: trailing commas
-      let repaired = s.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
-      // 5) Remove BOM or stray control chars
-      repaired = repaired.replace(/^\uFEFF/, '').replace(/[\u0000-\u001F]+/g, ' ');
+      console.warn(`[TranslationService] Initial JSON.parse failed: ${String(e1)}; attempting repairs`);
+    }
+
+    // 4) Lightweight repairs: trailing commas and control chars
+    let repaired = s.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
+    repaired = repaired.replace(/^\uFEFF/, '').replace(/[\u0000-\u001F]+/g, ' ');
+
+    // 5) Brace/bracket balancing - append missing closers conservatively
+    try {
+      const openBraces = (repaired.match(/{/g) || []).length;
+      const closeBraces = (repaired.match(/}/g) || []).length;
+      if (openBraces > closeBraces) {
+        const toAdd = openBraces - closeBraces;
+        repaired = repaired + '}'.repeat(Math.min(toAdd, 10)); // limit to avoid runaway appends
+        console.log(`[TranslationService] Appended ${Math.min(toAdd,10)} closing brace(s) during repair`);
+      }
+
+      const openBrackets = (repaired.match(/\[/g) || []).length;
+      const closeBrackets = (repaired.match(/\]/g) || []).length;
+      if (openBrackets > closeBrackets) {
+        const toAdd = openBrackets - closeBrackets;
+        repaired = repaired + ']'.repeat(Math.min(toAdd, 10));
+        console.log(`[TranslationService] Appended ${Math.min(toAdd,10)} closing bracket(s) during repair`);
+      }
+    } catch (balanceErr) {
+      console.warn('[TranslationService] Error during brace/bracket balancing:', balanceErr);
+    }
+
+    console.log(`[TranslationService] Attempting parse after repair, repaired length: ${repaired.length}`);
+
+    // 6) Second parse attempt
+    try {
+      const parsed2 = JSON.parse(repaired);
+      return parsed2;
+    } catch (e2) {
+      console.warn(`[TranslationService] JSON.parse still failed after repairs: ${String(e2)}; trying largest JSON substring fallback`);
+    }
+
+    // 7) As a last resort, try to extract the largest JSON-looking substring
+    const match = repaired.match(/{[\s\S]*}/);
+    if (match) {
       try {
-        return JSON.parse(repaired);
-      } catch (e2) {
-        // 6) As a last resort, try to find the largest JSON-looking substring
-        const match = repaired.match(/{[\s\S]*}/);
-        if (match) {
-          try {
-            return JSON.parse(match[0]);
-          } catch {}
-        }
-        // Give up and bubble up error; caller will handle fallback
-        throw new Error(`Failed to parse model JSON safely: ${String(e2)}`);
+        const parsed3 = JSON.parse(match[0]);
+        console.log('[TranslationService] Parsed largest JSON-like substring successfully');
+        return parsed3;
+      } catch (e3) {
+        console.warn('[TranslationService] Largest-substring parse failed:', e3);
       }
     }
+
+    // 8) Log truncated previews of original and repaired payloads for debugging (avoid dumping huge payloads)
+    console.error('[TranslationService] JSON parsing failed after all repair attempts. Original (truncated 2000 chars):', original.slice(0, 2000));
+    console.error('[TranslationService] Repaired (truncated 2000 chars):', repaired.slice(0, 2000));
+
+    // Bubble up a helpful error; caller will handle fallback
+    throw new Error(`Failed to parse model JSON safely: Unable to recover from parse errors`);
   }
 
   /**
