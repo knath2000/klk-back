@@ -90,13 +90,11 @@ class WebSocketService {
         }
 
         if (!token) {
-          if (WebSocketService.REQUIRE_AUTH && !WebSocketService.ALLOW_GUEST_TRANSLATION) {
-            console.log('🔐 [WebSocket Auth] No token provided, REQUIRE_AUTH=true, ALLOW_GUEST_TRANSLATION=false, rejecting');
-            return next(new Error('Token required'));
-          } else {
-            console.log('🔐 [WebSocket Auth] No token provided, allowing anonymous (REQUIRE_AUTH=false or ALLOW_GUEST_TRANSLATION=true)');
-            return next();
-          }
+          // ALWAYS reject anonymous chat handshakes at the socket layer.
+          // Guests should use the REST translation endpoints (ALLOW_GUEST_TRANSLATION applies only to REST).
+          console.log('🔐 [WebSocket Auth] No token provided; rejecting handshake for chat sockets. Guests must use REST translation.');
+          console.log('🔐 [WebSocket Auth] ALLOW_GUEST_TRANSLATION=', WebSocketService.ALLOW_GUEST_TRANSLATION);
+          return next(new Error('Token required'));
         }
         if (!WebSocketService.JWKS || !WebSocketService.EXPECTED_ISSUER) {
           if (WebSocketService.REQUIRE_AUTH) {
@@ -475,9 +473,15 @@ class WebSocketService {
           console.log('[DEBUG] Socket user object:', (socket as any).user);
           const isAuthenticated = !!userId;
 
+          // Enforce authentication for chat functionality
+          if (!isAuthenticated) {
+            console.log('[Auth Guard] user_message rejected: unauthenticated socket:', socket.id);
+            socket.emit('error', { message: 'token-required' });
+            return;
+          }
+
           let conversationId = data.conversationId;
           let isNewConversation = false;
-          let tempConversationId = null;
           // A handler-scoped resolved ID to use after auth checks/creation
           let resolvedConversationId: string | undefined;
 
@@ -561,17 +565,7 @@ class WebSocketService {
 
             // Emit user message confirmation to client
             socket.emit('user_message_stored', { message_id: userMessageId, conversationId: resolvedConversationId });
-          } else {
-            // For unauthenticated users, use temporary conversation ID, skip DB
-            console.log('[DEBUG] Unauthenticated user, using temporary conversation');
-            if (!conversationId) {
-              tempConversationId = `temp-conv-${socket.id}-${Date.now()}`;
-              conversationId = tempConversationId;
-              isNewConversation = true;
-              console.log(`🆕 Created temporary conversation ${conversationId} for anonymous user`);
-            }
-            // No DB storage for unauth
-          }
+          } // end isAuthenticated branch (unauthenticated disallowed earlier)
 
           console.log('[DEBUG] Conversation ID resolved:', conversationId);
 
@@ -920,7 +914,12 @@ try {
       // Join conversation room
       socket.on('join_conversation', async (data: { conversationId: string; userId: string }) => {
         const { conversationId } = data;
-        const userId = (socket as any).user?.sub || data.userId;
+        const userId = (socket as any).user?.sub;
+        if (!userId) {
+          console.log('[Auth Guard] join_conversation rejected: unauthenticated socket:', socket.id);
+          socket.emit('error', { message: 'token-required' });
+          return;
+        }
         
         try {
           // Check if user has access to conversation
@@ -999,7 +998,12 @@ try {
         messageId?: string;
       }) => {
         const { conversationId, content, role, messageId } = data;
-        const userId = (socket as any).user?.sub || data.userId;
+        const userId = (socket as any).user?.sub;
+        if (!userId) {
+          console.log('[Auth Guard] send_message rejected: unauthenticated socket:', socket.id);
+          socket.emit('error', { message: 'token-required' });
+          return;
+        }
         
         try {
           // Check if user has access to conversation
@@ -1042,7 +1046,12 @@ try {
       // Typing indicator
       socket.on('typing', (data: { conversationId: string; userId: string; isTyping: boolean }) => {
         const { conversationId, isTyping } = data;
-        const userId = (socket as any).user?.sub || data.userId;
+        const userId = (socket as any).user?.sub;
+        if (!userId) {
+          console.log('[Auth Guard] typing rejected: unauthenticated socket:', socket.id);
+          socket.emit('error', { message: 'token-required' });
+          return;
+        }
         
         // Broadcast typing status to all users in the conversation room
         socket.to(conversationId).emit('user_typing', {
