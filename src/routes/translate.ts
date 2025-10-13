@@ -92,6 +92,11 @@ const translateHandler = async (req: Request, res: Response) => {
     }
   }
 
+  // Compute effectiveUserId early (used to attribute persistence/cache keys)
+  const effectiveUserId = (typeof req.body?.userId === 'string' && req.body.userId.trim())
+    ? String(req.body.userId).trim()
+    : requestUserId || anonId || undefined;
+
   if (isGuest) {
     try {
       const bodySize = Buffer.byteLength(JSON.stringify(req.body || ''), 'utf8');
@@ -117,17 +122,46 @@ const translateHandler = async (req: Request, res: Response) => {
       });
     }
 
-    const { text, sourceLang, targetLang, context, userId }: TranslationRequest = req.body;
-    // Effective user id: prefer explicit userId from body, then authenticated request user, then anonId for guests
-    const effectiveUserId = (userId && String(userId).trim()) || requestUserId || anonId || undefined;
+    // Defensive extraction + recovery: accept body fields or fallback to query params when necessary
+    const body = req.body || {};
+    let text: string | undefined = typeof body.text === 'string' ? body.text : undefined;
+    let sourceLang: string | undefined = typeof body.sourceLang === 'string' ? body.sourceLang : undefined;
+    let targetLang: string | undefined = typeof body.targetLang === 'string' ? body.targetLang : undefined;
+    let context: string | undefined = typeof body.context === 'string' ? body.context : undefined;
+    let userId: string | undefined = typeof body.userId === 'string' ? body.userId : undefined;
 
+    // Recover from "undefined" string or missing fields by checking query params
+    if (typeof text === 'string' && text.trim() === 'undefined') {
+      const qText = typeof req.query?.text === 'string' ? String(req.query.text) : undefined;
+      console.warn('🔧 Recovering translation "text" from query params (was string "undefined"):', qText ? qText.slice(0, 100) : null);
+      text = qText;
+    }
+    if (!text && typeof req.query?.text === 'string') {
+      text = String(req.query.text);
+      console.log('🔧 Extracted translation text from query params:', text.slice(0, 100));
+    }
+
+    // Normalize language codes with safe defaults
+    if (!sourceLang && typeof req.query?.sourceLang === 'string') sourceLang = String(req.query.sourceLang);
+    if (!targetLang && typeof req.query?.targetLang === 'string') targetLang = String(req.query.targetLang);
+
+    if (!sourceLang) sourceLang = 'en';
+    if (!targetLang) targetLang = 'es';
+
+    // Final typed request assembly (ensure text is a string to allow .trim())
     const request: TranslationRequest = {
-      text: text.trim(),
-      sourceLang,
-      targetLang,
+      text: (text || '').trim(),
+      sourceLang: sourceLang || 'en',
+      targetLang: targetLang || 'es',
       context,
       userId: effectiveUserId,
     };
+
+    // Diagnostic: log processing context after request assembled (safe to use request.text)
+    console.log(`🔄 Processing translation request: ${request.text.substring(0, 50)}... (${request.sourceLang}→${request.targetLang})`, {
+      guest: isGuest,
+      userId: effectiveUserId ?? null,
+    });
 
     // Check DB cache for existing translation (global, user-agnostic) before invoking LLM
     try {
@@ -171,17 +205,13 @@ const translateHandler = async (req: Request, res: Response) => {
       }
     }
 
-    console.log(`🔄 Processing translation request: ${text.substring(0, 50)}... (${sourceLang}→${targetLang})`, {
-      guest: isGuest,
-      userId: effectiveUserId ?? null,
-    });
-
     const result = await translationService.translate(request);
 
     // Persist the translation for both authenticated users and guests (effectively keyed by anon_id)
     if (effectiveUserId) {
       try {
-        await translationService.saveTranslation(effectiveUserId, text.trim(), result, sourceLang, targetLang);
+        // Use request.text which is normalized to a string
+        await translationService.saveTranslation(effectiveUserId, request.text, result, request.sourceLang, request.targetLang);
       } catch (persistErr) {
         console.warn('Failed to persist translation (REST):', persistErr);
       }
