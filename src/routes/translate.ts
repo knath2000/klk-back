@@ -157,6 +157,27 @@ const translateHandler = async (req: Request, res: Response) => {
       userId: effectiveUserId,
     };
 
+    // CRITICAL GUARD: After all recovery and defaults, if any core field is still "undefined" (string literal), reject.
+    if (request.text === 'undefined' || request.sourceLang === 'undefined' || request.targetLang === 'undefined') {
+      console.error('🚨 Backend: Rejecting translation request due to literal "undefined" string in core fields:', {
+        text: request.text,
+        sourceLang: request.sourceLang,
+        targetLang: request.targetLang,
+        rawBody: req.body, // For debugging original payload
+        recoveredFromQuery: {
+          text: req.query?.text,
+          sourceLang: req.query?.sourceLang,
+          targetLang: req.query?.targetLang,
+        },
+      });
+      return res.status(400).json({
+        error: 'Invalid translation request',
+        message: 'One or more required fields contain the incorrect value "undefined".',
+        timestamp: new Date().toISOString(),
+        requestId: `error_undefined_${Date.now()}`
+      });
+    }
+
     // Diagnostic: log processing context after request assembled (safe to use request.text)
     console.log(`🔄 Processing translation request: ${request.text.substring(0, 50)}... (${request.sourceLang}→${request.targetLang})`, {
       guest: isGuest,
