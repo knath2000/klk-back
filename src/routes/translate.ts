@@ -14,6 +14,9 @@ const guestLimiter: RateLimitRequestHandler = rateLimit({
   max: GUEST_MAX_REQUESTS,
   standardHeaders: true,
   legacyHeaders: false,
+  // NOTE: express-rate-limit officially recommends using `ipKeyGenerator` helper for correct IPv6 handling.
+  // We are using req.ip directly here as a workaround for a TypeScript error,
+  // but future updates should prioritize using ipKeyGenerator if types are resolved.
   keyGenerator: (req: Request) => req.ip || req.connection.remoteAddress || 'unknown',
   handler: (req: Request, res: Response) => {
     res.status(429).json({
@@ -29,7 +32,10 @@ const authedLimiter: RateLimitRequestHandler = rateLimit({
   max: AUTH_MAX_REQUESTS,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req: Request) => getRequestUserId(req) || req.ip || req.connection.remoteAddress || 'unknown',
+  // NOTE: express-rate-limit officially recommends using `ipKeyGenerator` helper for correct IPv6 handling.
+  // We are using req.ip directly here as a workaround for a TypeScript error,
+  // but future updates should prioritize using ipKeyGenerator if types are resolved.
+  keyGenerator: (req: Request) => `${getRequestUserId(req) || 'guest'}:${req.ip || req.connection.remoteAddress || 'unknown'}`,
   handler: (req: Request, res: Response) => {
     res.status(429).json({
       error: 'Too many requests',
