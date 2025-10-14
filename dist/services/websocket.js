@@ -50,14 +50,11 @@ class WebSocketService {
                     });
                 }
                 if (!token) {
-                    if (WebSocketService.REQUIRE_AUTH && !WebSocketService.ALLOW_GUEST_TRANSLATION) {
-                        console.log('🔐 [WebSocket Auth] No token provided, REQUIRE_AUTH=true, ALLOW_GUEST_TRANSLATION=false, rejecting');
-                        return next(new Error('Token required'));
-                    }
-                    else {
-                        console.log('🔐 [WebSocket Auth] No token provided, allowing anonymous (REQUIRE_AUTH=false or ALLOW_GUEST_TRANSLATION=true)');
-                        return next();
-                    }
+                    // ALWAYS reject anonymous chat handshakes at the socket layer.
+                    // Guests should use the REST translation endpoints (ALLOW_GUEST_TRANSLATION applies only to REST).
+                    console.log('🔐 [WebSocket Auth] No token provided; rejecting handshake for chat sockets. Guests must use REST translation.');
+                    console.log('🔐 [WebSocket Auth] ALLOW_GUEST_TRANSLATION=', WebSocketService.ALLOW_GUEST_TRANSLATION);
+                    return next(new Error('Token required'));
                 }
                 if (!WebSocketService.JWKS || !WebSocketService.EXPECTED_ISSUER) {
                     if (WebSocketService.REQUIRE_AUTH) {
@@ -215,6 +212,46 @@ class WebSocketService {
                     let result;
                     try {
                         const authedUserId = socket.user?.sub || socket.id;
+                        // 1) Try a DB cache lookup (global, user-agnostic). If found, emit immediately and skip LLM.
+                        try {
+                            const cached = await translationService_1.translationService.findCachedTranslation(data.query, data.language || 'en', 'es');
+                            if (cached) {
+                                console.log('🗃️ WebSocket cache hit for query:', data.query);
+                                const frontendResult = {
+                                    id: this.generateMessageId(),
+                                    query: data.query,
+                                    definitions: cached.definitions || [],
+                                    examples: cached.examples || [],
+                                    conjugations: cached.conjugations || {},
+                                    audio: cached.audio || undefined,
+                                    related: cached.related || undefined,
+                                    entry: cached.entry || undefined,
+                                    timestamp: Date.now()
+                                };
+                                // Emit final directly from cache
+                                socket.emit('translation_final', frontendResult);
+                                // Count as success (we returned a result)
+                                this.metrics.successes.inc();
+                                console.log('🗃️ Emitted cached translation for:', data.query);
+                                // Persist for authenticated users (best-effort) - still record that this user requested it
+                                try {
+                                    if (isAuthenticated && authedUserId) {
+                                        await translationService_1.translationService.saveTranslation(authedUserId, data.query.trim(), cached, data.language || 'en', 'es');
+                                    }
+                                }
+                                catch (persistErr) {
+                                    console.warn('Failed to persist cached translation (websocket):', persistErr);
+                                }
+                                return;
+                            }
+                            else {
+                                console.log('🗃️ Cache miss for query:', data.query);
+                            }
+                        }
+                        catch (cacheErr) {
+                            console.warn('🗃️ Cache lookup error (continuing to LLM):', cacheErr);
+                        }
+                        // 2) Cache miss -> call translation service (with retries)
                         // Retry function with exponential backoff
                         const attempt = async (tries = 0) => {
                             try {
@@ -278,9 +315,19 @@ class WebSocketService {
                                 socket.emit('translation_delta', { chunk, index, total: chunks.length, id: frontendResult.id });
                             }, index * 100); // 100ms delay per chunk
                         });
-                        setTimeout(() => {
+                        setTimeout(async () => {
                             console.log('📤 Emitting translation_final for:', frontendResult.id, 'to socket:', socket.id);
                             socket.emit('translation_final', frontendResult);
+                            // Persist translation for authenticated users (best-effort)
+                            try {
+                                const persistUserId = socket.user?.sub || socket.id;
+                                if (isAuthenticated && persistUserId) {
+                                    await translationService_1.translationService.saveTranslation(persistUserId, data.query.trim(), result, data.language || 'en', 'es');
+                                }
+                            }
+                            catch (persistErr) {
+                                console.warn('Failed to persist translation (websocket):', persistErr);
+                            }
                         }, chunks.length * 100 + 500);
                     }
                     else {
@@ -348,9 +395,14 @@ class WebSocketService {
                     console.log('[DEBUG] Extracted userId:', userId ? `${userId.slice(0, 8)}...` : 'none (anonymous)');
                     console.log('[DEBUG] Socket user object:', socket.user);
                     const isAuthenticated = !!userId;
+                    // Enforce authentication for chat functionality
+                    if (!isAuthenticated) {
+                        console.log('[Auth Guard] user_message rejected: unauthenticated socket:', socket.id);
+                        socket.emit('error', { message: 'token-required' });
+                        return;
+                    }
                     let conversationId = data.conversationId;
                     let isNewConversation = false;
-                    let tempConversationId = null;
                     // A handler-scoped resolved ID to use after auth checks/creation
                     let resolvedConversationId;
                     if (isAuthenticated) {
@@ -431,18 +483,7 @@ class WebSocketService {
                         console.log(`💾 Stored user message ${userMessageId} in conversation ${resolvedConversationId}`);
                         // Emit user message confirmation to client
                         socket.emit('user_message_stored', { message_id: userMessageId, conversationId: resolvedConversationId });
-                    }
-                    else {
-                        // For unauthenticated users, use temporary conversation ID, skip DB
-                        console.log('[DEBUG] Unauthenticated user, using temporary conversation');
-                        if (!conversationId) {
-                            tempConversationId = `temp-conv-${socket.id}-${Date.now()}`;
-                            conversationId = tempConversationId;
-                            isNewConversation = true;
-                            console.log(`🆕 Created temporary conversation ${conversationId} for anonymous user`);
-                        }
-                        // No DB storage for unauth
-                    }
+                    } // end isAuthenticated branch (unauthenticated disallowed earlier)
                     console.log('[DEBUG] Conversation ID resolved:', conversationId);
                     // Fetch persona (common for both auth/unauth)
                     console.log('[DEBUG] Fetching persona');
@@ -480,7 +521,22 @@ class WebSocketService {
                     // Determine effective model with strict precedence
                     let effectiveModel;
                     if (data.model) {
-                        effectiveModel = data.model;
+                        // Defensive normalization: map legacy meta-llama slugs to new Google slugs,
+                        // and treat 'default' as the environment-configured default.
+                        const legacyToNewModelMap = {
+                            'meta-llama/llama-3.2-3b-instruct': 'google/gemma-3-27b-it',
+                            'meta-llama/llama-3.3-8b-instruct:free': 'google/gemini-2.5-flash-lite',
+                            'meta-llama/llama-3.3-70b-instruct': 'google/gemini-2.5-flash'
+                        };
+                        let payloadModel = String(data.model || '').trim();
+                        if (!payloadModel || payloadModel.toLowerCase() === 'default') {
+                            payloadModel = process.env.OPENROUTER_MODEL || 'google/gemma-3-27b-it';
+                        }
+                        else if (legacyToNewModelMap[payloadModel]) {
+                            payloadModel = legacyToNewModelMap[payloadModel];
+                            console.log(`[Model Normalization] Remapped legacy payload model to ${payloadModel}`);
+                        }
+                        effectiveModel = payloadModel;
                         console.log(`🧠 Using payload-selected model for request ${data.message_id}: ${effectiveModel}`);
                     }
                     else if (isAuthenticated && conversationId) {
@@ -496,7 +552,8 @@ class WebSocketService {
                         }
                     }
                     if (!effectiveModel) {
-                        effectiveModel = process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+                        // Use the new default Google Gemma model when no model is resolved
+                        effectiveModel = process.env.OPENROUTER_MODEL || 'google/gemma-3-27b-it';
                         console.log(`🔁 Fallback to default model for request ${data.message_id}: ${effectiveModel}`);
                         // Validate effectiveModel before proceeding
                         if (!effectiveModel || effectiveModel.trim().length === 0) {
@@ -742,7 +799,12 @@ class WebSocketService {
             // Join conversation room
             socket.on('join_conversation', async (data) => {
                 const { conversationId } = data;
-                const userId = socket.user?.sub || data.userId;
+                const userId = socket.user?.sub;
+                if (!userId) {
+                    console.log('[Auth Guard] join_conversation rejected: unauthenticated socket:', socket.id);
+                    socket.emit('error', { message: 'token-required' });
+                    return;
+                }
                 try {
                     // Check if user has access to conversation
                     const hasAccess = await collaborationService_1.collaborationService.hasAccessToConversation(conversationId, userId);
@@ -802,7 +864,12 @@ class WebSocketService {
             // Send message to conversation
             socket.on('send_message', async (data) => {
                 const { conversationId, content, role, messageId } = data;
-                const userId = socket.user?.sub || data.userId;
+                const userId = socket.user?.sub;
+                if (!userId) {
+                    console.log('[Auth Guard] send_message rejected: unauthenticated socket:', socket.id);
+                    socket.emit('error', { message: 'token-required' });
+                    return;
+                }
                 try {
                     // Check if user has access to conversation
                     const hasAccess = await collaborationService_1.collaborationService.hasAccessToConversation(conversationId, userId);
@@ -839,7 +906,12 @@ class WebSocketService {
             // Typing indicator
             socket.on('typing', (data) => {
                 const { conversationId, isTyping } = data;
-                const userId = socket.user?.sub || data.userId;
+                const userId = socket.user?.sub;
+                if (!userId) {
+                    console.log('[Auth Guard] typing rejected: unauthenticated socket:', socket.id);
+                    socket.emit('error', { message: 'token-required' });
+                    return;
+                }
                 // Broadcast typing status to all users in the conversation room
                 socket.to(conversationId).emit('user_typing', {
                     userId,

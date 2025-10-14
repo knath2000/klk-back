@@ -94,7 +94,7 @@ server.use('/api/search', auth_2.neonAuthMiddleware, search_1.default);
 server.use('/api/teams', auth_2.neonAuthMiddleware, teams_1.default);
 server.use('/api/analytics', auth_2.neonAuthMiddleware, analytics_1.default);
 server.use('/api/collaboration', auth_2.neonAuthMiddleware, collaboration_1.default);
-server.use('/api/translate', auth_2.neonAuthMiddleware, translate_1.default);
+server.use('/api/translate', auth_2.optionalNeonAuthMiddleware, translate_1.default);
 // Public/Auth routes (Logout should be here)
 server.use('/api/auth', auth_1.default);
 // Optionally public (leave personas + models open, or secure later if needed)

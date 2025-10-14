@@ -2,22 +2,24 @@ import express, { Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'crypto';
 import { translationService, TranslationRequest } from '../services/translationService';
 import { personaService } from '../services/personaService';
-import rateLimit, { RateLimitRequestHandler } from 'express-rate-limit';
+import rateLimit, { RateLimitRequestHandler, ipKeyGenerator } from 'express-rate-limit';
 
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const GUEST_MAX_REQUESTS = 30;
 const AUTH_MAX_REQUESTS = 120;
 const MAX_BODY_BYTES = 8 * 1024; // 8KB payload limit for guests
 
-const guestLimiter: RateLimitRequestHandler = rateLimit({
+const myIpKeyGenerator = (request: Request, response: Response): string => {
+  // Using the original ipKeyGenerator from the library
+  return (ipKeyGenerator as any)(request, response); // Cast to any to bypass persistent TypeScript error
+};
+
+const guestLimiter: RateLimitRequestHandler = rateLimit({ // Line 12
   windowMs: RATE_LIMIT_WINDOW_MS,
   max: GUEST_MAX_REQUESTS,
   standardHeaders: true,
   legacyHeaders: false,
-  // NOTE: express-rate-limit officially recommends using `ipKeyGenerator` helper for correct IPv6 handling.
-  // We are using req.ip directly here as a workaround for a TypeScript error,
-  // but future updates should prioritize using ipKeyGenerator if types are resolved.
-  keyGenerator: (req: Request) => req.ip || req.connection.remoteAddress || 'unknown',
+  keyGenerator: myIpKeyGenerator, // Use the custom wrapper
   handler: (req: Request, res: Response) => {
     res.status(429).json({
       error: 'Too many requests',
@@ -32,10 +34,7 @@ const authedLimiter: RateLimitRequestHandler = rateLimit({
   max: AUTH_MAX_REQUESTS,
   standardHeaders: true,
   legacyHeaders: false,
-  // NOTE: express-rate-limit officially recommends using `ipKeyGenerator` helper for correct IPv6 handling.
-  // We are using req.ip directly here as a workaround for a TypeScript error,
-  // but future updates should prioritize using ipKeyGenerator if types are resolved.
-  keyGenerator: (req: Request) => `${getRequestUserId(req) || 'guest'}:${req.ip || req.connection.remoteAddress || 'unknown'}`,
+  keyGenerator: (req, res) => `${getRequestUserId(req) || 'guest'}:${myIpKeyGenerator(req, res)}`, // Combine user ID with custom wrapper output
   handler: (req: Request, res: Response) => {
     res.status(429).json({
       error: 'Too many requests',

@@ -70,6 +70,7 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
+            let concatenated = '';
             // Store stream resources for cleanup
             this.activeStreams.set(requestId, { reader, decoder, controller });
             let hasChunks = false;
@@ -77,11 +78,16 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) {
+                        // Log concatenated raw payload for debugging (truncated to avoid huge logs)
                         console.log(`[OpenRouter] Stream complete for request ${requestId}, hasChunks: ${hasChunks}`);
+                        console.log(`[OpenRouter] Concatenated payload length for ${requestId}: ${concatenated.length}`);
+                        console.log(`[OpenRouter] Concatenated payload preview (truncated 2000 chars):`, concatenated.slice(0, 2000));
                         yield { isFinal: true };
                         break;
                     }
-                    buffer += decoder.decode(value, { stream: true });
+                    const chunkText = decoder.decode(value, { stream: true });
+                    buffer += chunkText;
+                    concatenated += chunkText;
                     // Process complete lines from buffer
                     while (true) {
                         const lineEnd = buffer.indexOf('\n');
@@ -93,6 +99,8 @@ class OpenRouterAdapter extends llmAdapter_1.BaseLLMAdapter {
                             const data = line.slice(6);
                             if (data === '[DONE]') {
                                 console.log(`[OpenRouter] Stream ended with [DONE] for request ${requestId}`);
+                                console.log(`[OpenRouter] Concatenated payload length for ${requestId} at DONE: ${concatenated.length}`);
+                                console.log(`[OpenRouter] Concatenated payload preview (truncated 2000 chars) at DONE:`, concatenated.slice(0, 2000));
                                 yield { isFinal: true };
                                 return;
                             }

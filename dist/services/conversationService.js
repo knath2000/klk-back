@@ -19,7 +19,7 @@ class ConversationService {
                 id: conversationData.id,
                 user_id: conversationData.user_id,
                 title: conversationData.title || '',
-                model: conversationData.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini',
+                model: conversationData.model || process.env.OPENROUTER_MODEL || 'google/gemma-3-27b-it',
                 persona_id: conversationData.persona_id ?? null,
                 // Prisma handles created_at default; explicitly set updated_at
                 updated_at: new Date(),
@@ -229,7 +229,7 @@ class ConversationService {
         catch (e) {
             console.warn('[conversationService.getCurrentModel] DB unavailable; using default model.', e?.message || e);
         }
-        const defaultModel = process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+        const defaultModel = process.env.OPENROUTER_MODEL || 'google/gemma-3-27b-it';
         console.log(`[ConversationService] getCurrentModel fallback to default ${defaultModel} for id ${conversationId} at ${new Date().toISOString()}, time: ${Date.now() - startTime}ms`);
         // Final fallback to default
         return defaultModel;
