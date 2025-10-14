@@ -1,1 +1,1 @@
-{"version":3,"file":"collaboration.d.ts","sourceRoot":"","sources":["../../src/routes/collaboration.ts"],"names":[],"mappings":"AAIA,QAAA,MAAM,MAAM,4CAAW,CAAC;AAkMxB,eAAe,MAAM,CAAC"}
+{"version":3,"file":"collaboration.d.ts","sourceRoot":"","sources":["../../src/routes/collaboration.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,MAAM,EAAE,MAAM,SAAS,CAAC;AAIjC,QAAA,MAAM,MAAM,EAAE,MAAiB,CAAC;AAkMhC,eAAe,MAAM,CAAC"}

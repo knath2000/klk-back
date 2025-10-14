@@ -3,17 +3,17 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-const express_1 = require("express");
 const personaService_1 = require("../services/personaService");
 const feedbackService_1 = require("../services/feedbackService");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const router = (0, express_1.Router)();
+const express_1 = __importDefault(require("express"));
+const router = express_1.default.Router();
 /**
  * GET /api/personas
  * Returns the list of available personas for the client
  */
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
     try {
         console.log('=== PERSONAS API REQUEST ===');
         console.log('   Timestamp:', new Date().toISOString());

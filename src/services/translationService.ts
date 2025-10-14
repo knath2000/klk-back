@@ -1,8 +1,14 @@
 import { LLMMessage, LLMOptions } from '../types';
 import { OpenRouterAdapter } from './openrouterAdapter';
-import { personaService } from './personaService';
-import { TranslationResponseSchema } from './translationSchema';
+import { AnalyticsService } from './analyticsService';
+import { Translation } from '@prisma/client';
+import { jsonrepair } from 'jsonrepair';
 import { PrismaClient } from '@prisma/client';
+import { TranslationResponseSchema } from './translationSchema';
+import { personaService } from './personaService';
+
+const DEFAULT_SCHEMA_VERSION = 'dict_v1';
+const CACHE_TTL_MS = 1000 * 60 * 60; // 1 hour
 
 export interface TranslationRequest {
   text: string;
@@ -73,24 +79,28 @@ interface DictionaryEntry {
 }
 
 export class TranslationService {
-  private kilocodeAdapter: OpenRouterAdapter;
-  private cache: Map<string, { data: TranslationResponse; timestamp: number }> = new Map();
-  private readonly CACHE_TTL = 1000 * 60 * 30; // 30 minutes
-  // New: version the schema/output format to safely bust stale cache entries
-  private readonly SCHEMA_VERSION = 'dict_v1';
+  private openRouterAdapter: OpenRouterAdapter;
+  private analyticsService: AnalyticsService;
+  private prisma: PrismaClient;
+
+  private schemaVersion = DEFAULT_SCHEMA_VERSION;
+  private cacheTtl = CACHE_TTL_MS;
+
+  // In-memory cache for faster lookups (consider Redis for production scale)
+  // Stores { data: TranslationResponse, timestamp: number }
+  private cache = new Map<string, { data: TranslationResponse; timestamp: number }>();
+
+  // Advanced metrics for monitoring
   private metrics = {
     requests: { count: 0, inc: () => this.metrics.requests.count++ },
     successes: { count: 0, inc: () => this.metrics.successes.count++ },
-    errors: { count: 0, inc: () => this.metrics.errors.count++ }
-  };
-  // Prisma client for NeonDB (translations persistence)
-  private prisma = new PrismaClient();
-  
-  // Cache metrics (hit/miss/errors)
-  private cacheMetrics = {
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheErrors: 0
+    errors: { count: 0, inc: () => this.metrics.errors.count++ },
+    cacheHits: { count: 0, inc: () => this.metrics.cacheHits.count++ },
+    cacheMisses: { count: 0, inc: () => this.metrics.cacheMisses.count++ },
+    jsonParseErrors: { count: 0, inc: () => this.metrics.jsonParseErrors.count++ },
+    jsonRepairSuccesses: { count: 0, inc: () => this.metrics.jsonRepairSuccesses.count++ },
+    jsonRepairFailures: { count: 0, inc: () => this.metrics.jsonRepairFailures.count++ },
+    modelFailovers: { count: 0, inc: () => this.metrics.modelFailovers.count++ },
   };
 
   /**
@@ -137,21 +147,21 @@ export class TranslationService {
       });
 
       if (!row) {
-        this.cacheMetrics.cacheMisses++;
+        this.metrics.cacheMisses.inc();
         return null;
       }
 
       try {
         const parsed = JSON.parse(row.translation);
-        this.cacheMetrics.cacheHits++;
+        this.metrics.cacheHits.inc();
         return parsed;
       } catch (parseErr) {
-        this.cacheMetrics.cacheErrors++;
+        this.metrics.jsonParseErrors.inc(); // Use jsonParseErrors for cache read errors as well
         console.warn('Failed to parse cached translation JSON:', parseErr);
         return null;
       }
     } catch (err: any) {
-      this.cacheMetrics.cacheErrors++;
+      this.metrics.errors.inc(); // General cache operation errors
       console.error('Cache lookup failed:', err?.message || err);
       return null;
     }
@@ -174,8 +184,17 @@ export class TranslationService {
     return asciiLike;
   }
 
-  constructor(kilocodeAdapter: OpenRouterAdapter) {
-    this.kilocodeAdapter = kilocodeAdapter;
+  constructor() {
+    this.openRouterAdapter = new OpenRouterAdapter(
+      process.env.OPENROUTER_API_KEY || '',
+      process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
+    );
+    this.analyticsService = new AnalyticsService();
+    this.prisma = new PrismaClient(); // Correct instantiation
+    this.init(); // Now safe to call
+  }
+
+  private init() {
     // Log env vars to verify loading
     console.log('TranslationService initialized with OPENROUTER_BASE_URL:', process.env.OPENROUTER_BASE_URL || 'DEFAULT (openrouter.ai)');
     console.log('OPENROUTER_MODEL:', process.env.OPENROUTER_MODEL || 'DEFAULT (gpt-4o-mini)');
@@ -341,19 +360,23 @@ export class TranslationService {
     this.metrics.requests.inc();
 
     // Check cache first
-    const cached = this.cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-      const { definitions = [], entry } = cached.data;
+    const cached = await this.findCachedTranslation(request.text, request.sourceLang, request.targetLang);
+
+    if (cached) {
+      const { definitions = [], entry } = cached;
       if (!entry && definitions.length === 0) {
         console.warn(`🔄 Stale cache entry for "${request.text}" (no definitions/entry), purging`);
-        this.cache.delete(cacheKey);
+        await this.prisma.translation.deleteMany({
+          where: { query: this.normalizeQuery(request.text || '') }
+        });
         this.metrics.errors.inc();
       } else {
-        console.log(`✅ Translation cache hit for: "${request.text}" (age: ${Math.round((Date.now() - cached.timestamp) / 1000)}s, definitions: ${definitions.length}, hasEntry: ${!!entry})`);
-        return cached.data;
+        console.log(`✅ Translation cache hit for: "${request.text}"`);
+        this.metrics.cacheHits.inc();
+        return cached;
       }
-    } else if (cached) {
-      console.log(`⏰ Cache expired for "${request.text}" (age: ${Math.round((Date.now() - cached.timestamp) / 1000)}s), fetching fresh`);
+    } else {
+      this.metrics.cacheMisses.inc();
     }
 
     // Get regional context if provided (declare outside try-catch)
@@ -451,6 +474,10 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
       ];
 
       // Model precedence for translation:
+      // 1) OPENROUTER_TRANSLATE_MODEL (primary)
+      // 2) OPENROUTER_MODEL (fallback 1)
+      // 3) hardcoded JSON-stable model (fallback 2)
+      // Model precedence for translation:
       // 1) OPENROUTER_TRANSLATE_MODEL
       // 2) OPENROUTER_MODEL
       // 3) sensible free default
@@ -458,6 +485,14 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
         process.env.OPENROUTER_TRANSLATE_MODEL ||
         process.env.OPENROUTER_MODEL ||
         'google/gemini-2.5-flash-lite';
+
+      const failoverModel = 'meta-llama/llama-3.3-8b-instruct:free'; // JSON-stable fallback model
+      let currentModel = effectiveModel;
+      let rawResult: string | undefined;
+      let parsedResult: any | undefined;
+      let openRouterResponse: TranslationResponse | undefined;
+      let safeResult: TranslationResponse | undefined;
+      let isFallbackResult = false; // Flag to prevent caching fallback JSON
 
       console.log('🧠 Translation effective model:', effectiveModel);
 
@@ -470,16 +505,52 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
         temperature: 0.2
       };
 
-      const rawResult = await this.kilocodeAdapter.fetchCompletion(messages, options);
-      const parsedResult = this.safeParseJson(rawResult);
-      if (parsedResult.entry && (!parsedResult.entry.senses?.length)) {
-        console.log('Retrying because entry has no senses');
+      // Attempt translation with retry and model failover
+      for (let attempt = 0; attempt < 2; attempt++) { // Allow one retry for the primary model
+        try {
+          console.log(`🧠 Attempting translation with model: ${currentModel}, attempt: ${attempt + 1}`);
+          rawResult = await this.openRouterAdapter.fetchCompletion(messages, { ...options, model: currentModel });
+          parsedResult = this.safeParseJson(rawResult); // This now includes jsonrepair
+
+          // If parse is successful, proceed
+          openRouterResponse = this.transformOpenRouterResponse(parsedResult);
+          safeResult = this.applySafetyFilters(openRouterResponse);
+
+          // Check for empty senses even after parsing/transformation. This is a common model issue.
+          if (safeResult.entry && (!safeResult.entry.senses || safeResult.entry.senses.length === 0)) {
+            console.warn(`⚠️ Model ${currentModel} returned an entry with no senses for "${request.text}". Retrying.`);
+            if (attempt === 0) continue; // Retry primary model once
+            throw new Error('No senses in response after retry'); // Force failover after primary model retry
+          }
+          break; // Exit loop if successful
+
+        } catch (error: any) {
+          console.warn(`⚠️ Translation attempt with ${currentModel} failed (attempt ${attempt + 1}):`, error.message);
+          this.metrics.errors.inc();
+          this.metrics.jsonParseErrors.inc(); // Assuming parse errors are the primary failure here
+
+          if (currentModel === failoverModel) {
+             // If failover model also failed, re-throw to trigger final fallback
+             throw error; 
+          }
+
+          // Switch to failover model
+          console.log(`🔄 Failing over from ${currentModel} to ${failoverModel}`);
+          this.metrics.modelFailovers.inc(); // Increment failover metric
+          currentModel = failoverModel;
+          options.model = currentModel;
+          // Reset attempt to 0 for the failover model
+          attempt = -1; 
+        }
       }
-      const openRouterResponse = this.transformOpenRouterResponse(parsedResult);
 
-      // Apply safety filters
-      const safeResult = this.applySafetyFilters(openRouterResponse);
-
+      // If we reach here without a successful break, it means both models failed.
+      // `safeResult` will be undefined if the initial `try` block never completed successfully.
+      if (!safeResult) {
+        isFallbackResult = true; // Mark as fallback if no valid result could be obtained
+        throw new Error('All translation attempts failed after retries and failover.'); 
+      }
+      
       // Post-transform: ensure literal-first for known verb+noun compounds (e.g., huelebicho/welebicho)
       if ((safeResult as any)?.entry) {
         this.ensureLiteralSenseForCompounds((safeResult as any).entry, request.text);
@@ -507,70 +578,44 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
 
       // Persist raw response for debugging
       this.persistRawResponse(request.text, parsedResult, safeResult);
+      console.log(`✅ Translation completed for: "${request.text}" with model: ${currentModel}`);
 
-      console.log('✅ Translation completed for:', request.text);
-
+      // Only attempt to retry if the result doesn't already have sufficient senses.
+      // This prevents infinite loops if models consistently fail to provide enough senses.
       // If the entry exists but has too few senses (e.g., only 1), force a retry prompting for full coverage.
       // Post-transform: ensure literal-first for known verb+noun compounds (e.g., huelebicho/welebicho)
       // Reorder senses to ensure literal comes first when present
+      const initialEntrySensesCount = (safeResult as any)?.entry?.senses?.length ?? 0;
       if ((safeResult as any)?.entry?.senses?.length) {
         (safeResult as any).entry.senses = this.reorderSensesLiteralFirst((safeResult as any).entry.senses);
       }
 
-      const entrySensesCount = (safeResult as any)?.entry?.senses?.length ?? 0;
-      // Retry when senses are missing or insufficient (< 3), to enumerate all common senses
-      if (entrySensesCount < 3) {
-        console.log(`🔁 Retry: insufficient sense coverage (${entrySensesCount}) for "${request.text}". Requesting expanded, multi-sense entry.`);
-        const userPromptExpanded = `Headword: ${request.text}
-Source language: ${effectiveSource}
-Target language: ${effectiveTarget}
-Regional preference: ${regionalContext || 'general Spanish'}
-Instructions:
-- Produce a single JSON object per the schema in the system prompt.
-- ENUMERATE ALL COMMON SENSES as distinct items in "senses" (do NOT merge). Target 6–12 senses for polysemous nouns like "cuero".
-- Keep ORDER: slang/colloquial/pejorative/vulgar FIRST; then neutral/general; then technical/archaic/localized LAST.
-- Each sense MUST include at least one bilingual (es/en) example pair.
-- Use compact labels for regions and registers.
-- Output ONLY valid JSON, no extra text.
-- Do NOT use markdown code fences (no \`\`\`json blocks).`;
+      const entrySensesCount = (safeResult as any)?.entry?.senses?.length ?? 0; // After all transformations
 
-        const retryMessages: LLMMessage[] = [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPromptExpanded }
-        ];
-        const rawResult2 = await this.kilocodeAdapter.fetchCompletion(retryMessages, options);
-        const parsedResult2 = this.safeParseJson(rawResult2);
-        const result2 = this.transformOpenRouterResponse(parsedResult2);
-
-        // Post-transform for retry: enforce literal-first insertion if missing
-        if ((result2 as any)?.entry) {
-          this.ensureLiteralSenseForCompounds((result2 as any).entry, request.text);
-        }
-        if ((result2 as any)?.entry?.senses?.length) {
-          (result2 as any).entry.senses = this.reorderSensesLiteralFirst((result2 as any).entry.senses);
-        }
-        const entrySensesCount2 = (result2 as any)?.entry?.senses?.length ?? 0;
-
-        if (entrySensesCount2 >= entrySensesCount) {
-          console.log(`✅ Retry improved coverage: ${entrySensesCount} → ${entrySensesCount2} senses for "${request.text}".`);
-          // Cache the improved result and return
-          this.cache.set(cacheKey, { data: result2, timestamp: Date.now() });
-          this.metrics.successes.inc();
-          return result2;
-        } else {
-          console.log(`⚠️ Retry did not improve coverage (still ${entrySensesCount2}). Proceeding with first result.`);
-        }
+      if (entrySensesCount < 3) { // Use a defined threshold (e.g., 3 senses minimum)
+        console.info(`ℹ️ Insufficient sense coverage (${entrySensesCount}) for "${request.text}". This result will be returned, but ideally, the model or prompt should be adjusted for better coverage.`);
+        // We will not retry here, as the retry/failover logic is now upstream
       }
 
-      // Cache the result
-      this.cache.set(cacheKey, { data: safeResult, timestamp: Date.now() });
-      console.log(`💾 Cached translation result for "${request.text}" (definitions: ${safeResult.definitions?.length || 0}, hasEntry: ${!!safeResult.entry})`);
+      // Only cache valid results; skip caching if this is a fallback result
+      if (!isFallbackResult) {
+        // Cache the result in memory
+        this.cache.set(cacheKey, { data: safeResult, timestamp: Date.now() });
+        console.log(`💾 Cached translation result (memory) for "${request.text}" (definitions: ${safeResult.definitions?.length || 0}, hasEntry: ${!!safeResult.entry})`);
 
-      // Metrics: Increment success counter
-      this.metrics.successes.inc();
+        // Persist to DB
+        await this.saveTranslation(request.userId!, request.text, safeResult, request.sourceLang, request.targetLang);
+        
+        // Metrics: Increment success counter
+        this.metrics.successes.inc();
+      } else {
+        console.warn(`🚫 Skipping cache save for "${request.text}" because it's a fallback result.`);
+        this.metrics.errors.inc(); // Count this as an error as we returned an undesirable result
+      }
 
-      return safeResult;
+      return safeResult; // Return the final result, whether successful or a well-handled fallback
     } catch (error: any) {
+      let isFallbackResult = true;
       console.error('❌ OpenRouter failed for', request.text, ':', error.message);
       console.error('OpenRouter error details:', {
         error: error.message,
@@ -578,8 +623,7 @@ Instructions:
         stack: error.stack,
         request: request
       });
-      // Metrics: Increment error counter
-      this.metrics.errors.inc();
+      this.metrics.errors.inc(); // Increment error for analytics
 
       // Final fallback JSON
       const finalFallback = {
@@ -634,81 +678,39 @@ Instructions:
     const original = raw;
     console.log(`[TranslationService] safeParseJson original length: ${original.length}`);
 
-    // 1) Strip common markdown code fences and obvious wrappers
-    let s = raw.trim()
-      .replace(/^\s*```json\s*/i, '')
-      .replace(/^\s*```\s*/i, '')
-      .replace(/\s*```$/i, '')
-      .trim();
-
-    // 2) Extract the outermost JSON object braces if present
-    const firstBrace = s.indexOf('{');
-    const lastBrace = s.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      s = s.slice(firstBrace, lastBrace + 1);
-    }
-
-    // 3) First parse attempt (fast path)
+    // Attempt initial parse
     try {
-      const parsed = JSON.parse(s);
-      return parsed;
-    } catch (e1) {
-      console.warn(`[TranslationService] Initial JSON.parse failed: ${String(e1)}; attempting repairs`);
-    }
-
-    // 4) Lightweight repairs: trailing commas and control chars
-    let repaired = s.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
-    repaired = repaired.replace(/^\uFEFF/, '').replace(/[\u0000-\u001F]+/g, ' ');
-
-    // 5) Brace/bracket balancing - append missing closers conservatively
-    try {
-      const openBraces = (repaired.match(/{/g) || []).length;
-      const closeBraces = (repaired.match(/}/g) || []).length;
-      if (openBraces > closeBraces) {
-        const toAdd = openBraces - closeBraces;
-        repaired = repaired + '}'.repeat(Math.min(toAdd, 10)); // limit to avoid runaway appends
-        console.log(`[TranslationService] Appended ${Math.min(toAdd,10)} closing brace(s) during repair`);
-      }
-
-      const openBrackets = (repaired.match(/\[/g) || []).length;
-      const closeBrackets = (repaired.match(/\]/g) || []).length;
-      if (openBrackets > closeBrackets) {
-        const toAdd = openBrackets - closeBrackets;
-        repaired = repaired + ']'.repeat(Math.min(toAdd, 10));
-        console.log(`[TranslationService] Appended ${Math.min(toAdd,10)} closing bracket(s) during repair`);
-      }
-    } catch (balanceErr) {
-      console.warn('[TranslationService] Error during brace/bracket balancing:', balanceErr);
-    }
-
-    console.log(`[TranslationService] Attempting parse after repair, repaired length: ${repaired.length}`);
-
-    // 6) Second parse attempt
-    try {
-      const parsed2 = JSON.parse(repaired);
-      return parsed2;
-    } catch (e2) {
-      console.warn(`[TranslationService] JSON.parse still failed after repairs: ${String(e2)}; trying largest JSON substring fallback`);
-    }
-
-    // 7) As a last resort, try to extract the largest JSON-looking substring
-    const match = repaired.match(/{[\s\S]*}/);
-    if (match) {
+      return JSON.parse(original);
+    } catch (initialError: any) {
+      console.warn('[TranslationService] Initial JSON.parse failed:', initialError.message, '; attempting repairs with jsonrepair');
+      this.metrics.jsonParseErrors.inc();
+      let repaired: string;
       try {
-        const parsed3 = JSON.parse(match[0]);
-        console.log('[TranslationService] Parsed largest JSON-like substring successfully');
-        return parsed3;
-      } catch (e3) {
-        console.warn('[TranslationService] Largest-substring parse failed:', e3);
+        repaired = jsonrepair(original);
+        this.metrics.jsonRepairSuccesses.inc();
+        const resultAfterRepair = JSON.parse(repaired);
+        console.log('[TranslationService] jsonrepair successful, repaired length:', repaired.length);
+        return resultAfterRepair;
+      } catch (repairError: any) {
+        console.warn('[TranslationService] jsonrepair failed:', repairError.message, '; trying largest JSON substring fallback');
+        this.metrics.jsonRepairFailures.inc();
+        // Fallback: try to extract the largest valid JSON substring
+        const largestSubstring = this.extractLargestJsonSubstring(original);
+
+        if (largestSubstring) {
+          try {
+            // Log before attempting parse after substring extraction
+            console.log('[TranslationService] Attempting parse after largest substring extraction, length:', largestSubstring.length);
+            return JSON.parse(largestSubstring);
+          } catch (substringError: any) {
+            console.error('[TranslationService] Largest-substring parse failed:', substringError.message);
+          }
+        }
       }
+      // Log original raw response for debugging, truncated in production
+      console.error('[TranslationService] JSON parsing failed after all repair attempts. Original (truncated 2000 chars):', original.slice(0, 2000));
+      throw new Error('Failed to parse model JSON safely: Unable to recover from parse errors');
     }
-
-    // 8) Log truncated previews of original and repaired payloads for debugging (avoid dumping huge payloads)
-    console.error('[TranslationService] JSON parsing failed after all repair attempts. Original (truncated 2000 chars):', original.slice(0, 2000));
-    console.error('[TranslationService] Repaired (truncated 2000 chars):', repaired.slice(0, 2000));
-
-    // Bubble up a helpful error; caller will handle fallback
-    throw new Error(`Failed to parse model JSON safely: Unable to recover from parse errors`);
   }
 
   /**
@@ -934,6 +936,34 @@ Instructions:
   }
 
   /**
+   * Extract the largest valid JSON substring from a potentially corrupted string.
+   * This is a fallback method when initial JSON parsing fails.
+   */
+  private extractLargestJsonSubstring(input: string): string | null {
+    // Remove any non-JSON content (e.g., code fences, markdown)
+    const cleaned = input.replace(/```json\s*|\s*```/g, '');
+    
+    // Find all potential JSON substrings
+    const matches = cleaned.match(/{[\s\S]*}/g);
+    if (!matches) return null;
+    
+    // Sort by length in descending order
+    const sortedMatches = matches.sort((a, b) => b.length - a.length);
+    
+    // Try each substring in order of size
+    for (const match of sortedMatches) {
+      try {
+        const result = JSON.parse(match);
+        return match;
+      } catch (e) {
+        // Continue to next larger substring
+      }
+    }
+    
+    return null;
+  }
+
+  /**
    * Persist a translation result for an authenticated user with deduplication.
    * Deduplication policy: user_id + normalized query + language pair + stableStringify(response)
    */
@@ -989,15 +1019,21 @@ Instructions:
   }
 
   private generateCacheKey(request: TranslationRequest): string {
-    return `${request.text}_${request.sourceLang}_${request.targetLang}_${request.context || ''}_${this.SCHEMA_VERSION}`;
+    return `${request.text}_${request.sourceLang}_${request.targetLang}_${request.context || ''}_${this.schemaVersion}`;
   }
 
   // Get metrics for monitoring
   getMetrics() {
     return {
-      requests: this.metrics.requests.count,
-      successes: this.metrics.successes.count,
-      errors: this.metrics.errors.count
+      requests: this.metrics.requests.count, // Total requests
+      successes: this.metrics.successes.count, // Successful translations
+      errors: this.metrics.errors.count, // OpenRouter/TranslationService errors
+      cacheHits: this.metrics.cacheHits.count, // Cache hits
+      cacheMisses: this.metrics.cacheMisses.count, // Cache misses
+      jsonParseErrors: this.metrics.jsonParseErrors.count, // Initial JSON parse errors
+      jsonRepairSuccesses: this.metrics.jsonRepairSuccesses.count, // JSON repairs that succeeded
+      jsonRepairFailures: this.metrics.jsonRepairFailures.count, // JSON repairs that failed
+      modelFailovers: this.metrics.modelFailovers.count, // Times model failed over
     };
   }
 
@@ -1007,9 +1043,9 @@ Instructions:
     let totalEntries = 0;
     let expiredEntries = 0;
 
-    for (const [key, value] of this.cache.entries()) {
+    for (const [, value] of this.cache.entries()) {
       totalEntries++;
-      if (now - value.timestamp > this.CACHE_TTL) {
+      if (now - value.timestamp > this.cacheTtl) {
         expiredEntries++;
       }
     }
@@ -1019,7 +1055,7 @@ Instructions:
       expiredEntries,
       activeEntries: totalEntries - expiredEntries,
       cacheSize: this.cache.size,
-      ttlMinutes: this.CACHE_TTL / (1000 * 60)
+      ttlMinutes: this.cacheTtl / (1000 * 60)
     };
   }
 
@@ -1028,7 +1064,7 @@ Instructions:
     const now = Date.now();
     let purgedCount = 0;
     for (const [key, value] of this.cache.entries()) {
-      if (now - value.timestamp > this.CACHE_TTL) {
+      if (now - value.timestamp > this.cacheTtl) {
         this.cache.delete(key);
         purgedCount++;
       }
@@ -1185,12 +1221,7 @@ Instructions:
 }
 
 // Singleton instance - now using OpenRouter exclusively
-export const translationService = new TranslationService(
-  new OpenRouterAdapter(
-    process.env.OPENROUTER_API_KEY || '',
-    process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
-  )
-);
+export const translationService = new TranslationService(); 
 
 // Periodic cache cleanup
 setInterval(() => {

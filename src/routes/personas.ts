@@ -1,18 +1,18 @@
-import { Router, Request, Response } from 'express';
 import { personaService } from '../services/personaService';
 import { feedbackService } from '../services/feedbackService';
 import { ChatService } from '../services/chatService';
 import { PersonasResponse, ErrorResponse, FeedbackData, FeedbackResponse, DebugTestRequest, DebugTestResponse, FeedbackStats } from '../types';
 import fs from 'fs';
 import path from 'path';
+import express, { Request, Response, Router } from 'express';
 
-const router = Router();
+const router: Router = express.Router();
 
 /**
  * GET /api/personas
  * Returns the list of available personas for the client
  */
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     console.log('=== PERSONAS API REQUEST ===');
     console.log('   Timestamp:', new Date().toISOString());

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 
-const router = Router();
+const router: Router = Router();
 
 // Get T3 Chat features information
 router.get('/', (req, res) => {

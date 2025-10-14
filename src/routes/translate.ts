@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction, Router } from 'express';
 import { randomUUID } from 'crypto';
 import { translationService, TranslationRequest } from '../services/translationService';
 import { personaService } from '../services/personaService';
@@ -52,7 +52,7 @@ type CachedResponse = {
 const guestCache = new Map<string, CachedResponse>();
 const GUEST_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-const router = express.Router();
+const router: Router = express.Router();
 
 function getRequestUserId(req: Request): string | null {
   const user = (req as any).user;

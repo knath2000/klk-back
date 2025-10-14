@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { subscriptionService } from '../services/subscriptionService';
 
-const router = Router();
+const router: Router = Router();
 
 // Get all subscription plans
 router.get('/plans', async (req, res) => {

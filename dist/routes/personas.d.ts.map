@@ -1,1 +1,1 @@
-{"version":3,"file":"personas.d.ts","sourceRoot":"","sources":["../../src/routes/personas.ts"],"names":[],"mappings":"AAQA,QAAA,MAAM,MAAM,4CAAW,CAAC;AAqRxB,eAAe,MAAM,CAAC"}
+{"version":3,"file":"personas.d.ts","sourceRoot":"","sources":["../../src/routes/personas.ts"],"names":[],"mappings":"AAMA,OAAgB,EAAqB,MAAM,EAAE,MAAM,SAAS,CAAC;AAE7D,QAAA,MAAM,MAAM,EAAE,MAAyB,CAAC;AAqRxC,eAAe,MAAM,CAAC"}

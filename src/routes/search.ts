@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { searchService } from '../services/searchService';
 
-const router = Router();
+const router: Router = Router();
 
 // Search conversations
 router.get('/:query', async (req, res) => {

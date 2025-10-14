@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { teamService } from '../services/teamService';
 import { collaborationService } from '../services/collaborationService';
 
-const router = Router();
+const router: Router = Router();
 
 // Create team
 router.post('/', async (req, res) => {

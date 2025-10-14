@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { collaborationService } from '../services/collaborationService';
 import { conversationService } from '../services/conversationService';
 
-const router = Router();
+const router: Router = Router();
 
 // Share conversation with user
 router.post('/conversations/:id/share', async (req, res) => {

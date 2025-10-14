@@ -3,7 +3,7 @@ import { analyticsService } from '../services/analyticsService';
 import { teamService } from '../services/teamService';
 import { conversationService } from '../services/conversationService';
 
-const router = Router();
+const router: Router = Router();
 
 // Get user analytics
 router.get('/user', async (req, res) => {

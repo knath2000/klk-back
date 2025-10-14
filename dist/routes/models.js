@@ -2,7 +2,19 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const conversationService_1 = require("../services/conversationService");
+const modelService_1 = require("../services/modelService");
 const router = (0, express_1.Router)();
+// Get all available models
+router.get('/', async (req, res) => {
+    try {
+        const models = await modelService_1.modelManager.getAvailableModels();
+        res.json(models);
+    }
+    catch (error) {
+        console.error('Error fetching models:', error);
+        res.status(500).json({ error: 'Failed to fetch models' });
+    }
+});
 router.post('/:id/switch', async (req, res) => {
     const { id } = req.params;
     const { conversationId } = req.body;

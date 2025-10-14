@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { conversationService } from '../services/conversationService';
 import { searchService } from '../services/searchService';
 
-const router = Router();
+const router: Router = Router();
 
 // Get user's conversations
 router.get('/', async (req, res) => {
