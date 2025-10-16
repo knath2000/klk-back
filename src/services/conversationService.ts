@@ -93,8 +93,28 @@ export class ConversationService {
     const startTime = Date.now();
     console.log(`[ConversationService] deleteConversation started for id ${id} at ${new Date(startTime).toISOString()}`);
 
-    await prisma.conversation.delete({ where: { id } });
-    console.log(`[ConversationService] deleteConversation completed for id ${id} at ${new Date().toISOString()}, time: ${Date.now() - startTime}ms`);
+    try {
+      // Delete dependent records first to satisfy FK constraints, then delete the conversation
+      await prisma.$transaction(async (tx) => {
+        // Remove messages
+        await tx.conversationMessage.deleteMany({ where: { conversation_id: id } });
+        // Remove model switches
+        await tx.conversationModel.deleteMany({ where: { conversation_id: id } });
+        // Remove shared conversation entries
+        await tx.sharedConversation.deleteMany({ where: { conversation_id: id } });
+        // Remove analytics row if exists
+        await tx.conversationAnalytics.deleteMany({ where: { conversation_id: id } });
+
+        // Finally delete the conversation row
+        await tx.conversation.delete({ where: { id } });
+      });
+
+      console.log(`[ConversationService] deleteConversation completed for id ${id} at ${new Date().toISOString()}, time: ${Date.now() - startTime}ms`);
+    } catch (e: any) {
+      console.error('[ConversationService] Error deleting conversation:', e?.message || e);
+      // Re-throw so upstream handlers return 500 and the proxy surfaces the error
+      throw e;
+    }
   }
 
   /**
