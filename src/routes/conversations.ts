@@ -52,13 +52,23 @@ router.post('/', async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const { title, model, persona_id } = req.body;
+    const { title, model, persona_id, message_count } = req.body;
     
+    // Guard: reject conversations with no messages to prevent empty conversation accumulation
+    // Conversations should only be persisted once the user sends their first message
+    if (message_count === 0 || message_count === null || message_count === undefined) {
+      console.log(`ℹ️ Rejecting empty conversation creation for user ${userId}: message_count=${message_count}`);
+      return res.status(400).json({ 
+        error: 'Cannot create conversation without messages. Send your first message to create a conversation.' 
+      });
+    }
+
     const conversation = await conversationService.createConversation({
       user_id: userId,
       title: title || 'New Conversation',
       model: model || 'gpt-4o-mini',
-      persona_id
+      persona_id,
+      message_count: message_count || 0
     } as any); // Type assertion to bypass strict typing for now
 
     res.status(201).json(conversation);
