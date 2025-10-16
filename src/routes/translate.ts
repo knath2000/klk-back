@@ -118,15 +118,6 @@ const translateHandler = async (req: Request, res: Response) => {
   }
 
   try {
-    const validation = validateTranslationRequest(req.body);
-    if (!validation.isValid) {
-      return res.status(400).json({
-        error: 'Validation failed',
-        details: validation.errors,
-        timestamp: new Date().toISOString()
-      });
-    }
-
     // Defensive extraction + recovery: accept body fields or fallback to query params when necessary
     const body = req.body || {};
     let text: string | undefined = typeof body.text === 'string' ? body.text : undefined;
@@ -180,6 +171,16 @@ const translateHandler = async (req: Request, res: Response) => {
         message: 'One or more required fields contain the incorrect value "undefined".',
         timestamp: new Date().toISOString(),
         requestId: `error_undefined_${Date.now()}`
+      });
+    }
+
+    // Validate the assembled request after recovery
+    const validation = validateAssembledRequest(request);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: validation.errors,
+        timestamp: new Date().toISOString()
       });
     }
 
@@ -323,6 +324,54 @@ const validateTranslationRequest = (body: any): { isValid: boolean; errors: stri
   }
 
   if (userId !== undefined && typeof userId !== 'string') {
+    errors.push('userId must be a string if provided');
+  }
+
+  return { isValid: errors.length === 0, errors };
+};
+
+// Validation for assembled request after recovery
+const validateAssembledRequest = (request: TranslationRequest): { isValid: boolean; errors: string[] } => {
+  const errors: string[] = [];
+
+  // Required fields validation
+  if (!request.text || typeof request.text !== 'string') {
+    errors.push('text is required and must be a string');
+  } else if (request.text.trim().length === 0) {
+    errors.push('text cannot be empty');
+  } else if (request.text.length > 1000) {
+    errors.push('text must be less than 1000 characters');
+  }
+
+  if (!request.sourceLang || typeof request.sourceLang !== 'string') {
+    errors.push('sourceLang is required and must be a string');
+  } else if (!['es', 'en'].includes(request.sourceLang)) {
+    errors.push('sourceLang must be either "es" or "en"');
+  }
+
+  if (!request.targetLang || typeof request.targetLang !== 'string') {
+    errors.push('targetLang is required and must be a string');
+  } else if (!['es', 'en'].includes(request.targetLang)) {
+    errors.push('targetLang must be either "es" or "en"');
+  }
+
+  // Prevent same language translation
+  if (request.sourceLang === request.targetLang) {
+    errors.push('sourceLang and targetLang cannot be the same');
+  }
+
+  // Optional fields validation
+  if (request.context !== undefined) {
+    if (typeof request.context !== 'string') {
+      errors.push('context must be a string if provided');
+    } else if (request.context.length > 10) {
+      errors.push('context must be less than 10 characters');
+    } else if (!personaService.isValidCountryKey(request.context)) {
+      errors.push(`Invalid context: ${request.context}. Must be a valid country key.`);
+    }
+  }
+
+  if (request.userId !== undefined && typeof request.userId !== 'string') {
     errors.push('userId must be a string if provided');
   }
 
