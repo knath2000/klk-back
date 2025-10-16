@@ -20,6 +20,30 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Delete all conversations for the authenticated user
+router.delete('/', async (req, res) => {
+  try {
+    const userId = (req as any).user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Require an explicit confirmation flag to avoid accidental mass deletion.
+    // Accept either query ?confirm=true or JSON body { confirm: true }
+    const confirmQuery = String(req.query?.confirm ?? '').toLowerCase() === 'true';
+    const confirmBody = req.body && (req.body.confirm === true || String(req.body.confirm).toLowerCase() === 'true');
+    if (!confirmQuery && !confirmBody) {
+      return res.status(400).json({ error: 'Missing confirmation. Call DELETE /api/conversations?confirm=true to proceed.' });
+    }
+
+    await conversationService.deleteAllConversations(userId);
+    return res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting all conversations:', error);
+    return res.status(500).json({ error: 'Failed to delete conversations' });
+  }
+});
+
 // Create new conversation
 router.post('/', async (req, res) => {
   try {
