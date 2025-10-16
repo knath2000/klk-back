@@ -235,7 +235,7 @@ const translateHandler = async (req: Request, res: Response) => {
     const result = await translationService.translate(request);
 
     // Persist the translation for both authenticated users and guests (effectively keyed by anon_id)
-    if (effectiveUserId) {
+    if (effectiveUserId && result.senses && result.senses.length > 0) {
       try {
         // Use request.text which is normalized to a string
         await translationService.saveTranslation(effectiveUserId, request.text, result, request.sourceLang, request.targetLang);

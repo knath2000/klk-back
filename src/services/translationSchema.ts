@@ -27,6 +27,9 @@ export const DictionaryEntrySchema = z.object({
 });
 
 export const TranslationResponseSchema = z.object({
+  headword: z.string().optional(),
+  part_of_speech: z.string().optional(),
+  senses: z.array(DictionarySenseSchema).optional(),
   definitions: z.array(z.object({
     text: z.string().optional(),
     meaning: z.string().optional(),

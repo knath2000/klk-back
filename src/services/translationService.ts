@@ -19,63 +19,67 @@ export interface TranslationRequest {
 }
 
 export interface TranslationResponse {
-  definitions: Array<{
-    text?: string;
-    meaning?: string;
-    partOfSpeech?: string;
-    pos?: string;
-    examples?: string[];
-    usage?: string;
-  }>;
-  examples: Array<{
-    text?: string;
-    translation?: string;
-    spanish?: string;
-    english?: string;
-    context?: string;
-  }>;
-  conjugations: Record<string, unknown>;
-  audio: Array<{
-    url?: string;
-    pronunciation?: string;
-    text?: string;
-    type?: string;
-  }> | {
-    ipa?: string;
-    suggestions?: string[];
-  };
-  related: {
-    synonyms?: string[];
-    antonyms?: string[];
-  };
-  // New: full dictionary entry for richer UI (SpanishDict-style)
-  entry?: DictionaryEntry;
+  headword: string;
+  pronunciation?: Pronunciation;
+  part_of_speech: string;
+  gender?: string | null;
+  inflections?: string[];
+  frequency?: number;
+  senses: Sense[];
+  audio?: AudioInfo | { ipa?: string; suggestions?: string[] } | any;
+  conjugations?: Record<string, Record<string, string>>;
+  related?: RelatedTerms | { synonyms?: string[]; antonyms?: string[] } | any;
+  examples?: Example[] | { text?: string; translation?: string; spanish?: string; english?: string; context?: string }[] | any;
+  definitions?: { text?: string; meaning?: string; partOfSpeech?: string; pos?: string; examples?: string[]; usage?: string }[];
+  entry?: DictionaryEntry | any;
+}
+
+interface Pronunciation {
+  ipa: string;
+  syllabification?: string; // made optional to match provider outputs
+}
+
+interface Sense {
+  sense_number: number;
+  registers?: string[]; // optional
+  regions?: string[];   // optional
+  gloss: string;
+  translation_es?: string; // optional helper field
+  usage_notes?: string;
+  examples?: Example[];
+  synonyms?: string[];
+  antonyms?: string[];
+  cross_references?: string[];
+}
+
+interface Example {
+  es: string;
+  en: string;
+}
+
+interface AudioInfo {
+  ipa: string;
+  suggestions: string[];
+}
+
+interface ConjugationTable {
+  [key: string]: string[];
+}
+
+interface RelatedTerms {
+  antonyms: string[];
+  synonyms: string[];
 }
 
 // New: SpanishDict-style dictionary entry schema
 interface DictionaryEntry {
   headword: string;
-  pronunciation: {
-    ipa: string;
-    syllabification?: string;
-  };
-  part_of_speech: string; // e.g., "n", "v", "adj"
-  gender: 'm' | 'f' | 'mf' | null;
-  inflections: string[];
+  pronunciation?: Pronunciation;
+  part_of_speech: string;
+  gender?: string | null;
+  inflections?: string[];
   frequency?: number;
-  senses: Array<{
-    sense_number: number;
-    registers?: string[]; // ["slang","colloquial","pejorative","vulgar","figurative","technical","archaic"]
-    regions?: string[];   // ["Mexico","Caribbean","Venezuela","Guatemala","Latin America","Spain",...]
-    gloss: string;
-    usage_notes?: string;
-    examples: Array<{ es: string; en: string }>;
-    synonyms?: string[];
-    antonyms?: string[];
-    cross_references?: string[];
-    // New: explicit Spanish translation/lemma for this sense (for EN→ES visibility)
-    translation_es?: string;
-  }>;
+  senses: Sense[];
 }
 
 export class TranslationService {
@@ -201,111 +205,126 @@ export class TranslationService {
     console.log('OPENROUTER_TRANSLATE_MODEL:', process.env.OPENROUTER_TRANSLATE_MODEL || 'DEFAULT (meta-llama/llama-4-maverick:free)');
   }
 
-  private transformOpenRouterResponse(openRouterResponse: any): TranslationResponse {
-    // Log raw response for debugging schema issues
-    console.log('🔍 Raw OpenRouter response before validation:', JSON.stringify(openRouterResponse, null, 2));
+  private transformOpenRouterResponse(openRouterResponse: any): any {
+    // Defensive raw value
+    const raw = openRouterResponse || {};
 
-    // Check if the response is a bare DictionaryEntry (has headword, senses, etc.)
-    const isBareDictionaryEntry = openRouterResponse &&
-      typeof openRouterResponse.headword === 'string' &&
-      Array.isArray(openRouterResponse.senses) &&
-      openRouterResponse.pronunciation;
-
-    if (isBareDictionaryEntry) {
-      console.log('🔄 Detected bare DictionaryEntry payload, wrapping in expected structure');
-      openRouterResponse = {
-        entry: openRouterResponse,
-        definitions: [],
-        examples: [],
-        conjugations: {},
-        audio: { ipa: '', suggestions: [] },
-        related: { synonyms: [], antonyms: [] }
-      };
-    }
-
-    // Inject defaults for missing optional fields to prevent Zod validation errors
-    const responseWithDefaults = {
-      definitions: openRouterResponse.definitions || [],
-      examples: openRouterResponse.examples || [],
-      conjugations: openRouterResponse.conjugations || {},
-      audio: openRouterResponse.audio || { ipa: '', suggestions: [] },
-      related: openRouterResponse.related || { synonyms: [], antonyms: [] },
-      entry: openRouterResponse.entry, // optional field
+    // Normalizers
+    const normalizeAudio = (a: any) => {
+      if (!a) return { ipa: '', suggestions: [] };
+      if (Array.isArray(a)) {
+        const first = a[0] || {};
+        return { ipa: first.ipa || first.pronunciation || first.url || '', suggestions: first.syllabification ? [first.syllabification] : [] };
+      }
+      return { ipa: a.ipa || a.pronunciation || '', suggestions: Array.isArray(a.suggestions) ? a.suggestions : [] };
     };
 
-    // Normalize gender and inflections in entry before schema validation
-    if (responseWithDefaults.entry) {
-      this.normalizeDictionaryEntry(responseWithDefaults.entry);
-    }
-
-    // Validate against schema first
-    const validated = TranslationResponseSchema.parse(responseWithDefaults);
-    
-    // Accept either legacy structured JSON or the new DictionaryEntry JSON.
-    // If it's a DictionaryEntry (has headword + senses), map it to legacy fields and return with entry.
-    const isDictionaryEntry =
-      validated.entry &&
-      Array.isArray(validated.entry.senses) &&
-      typeof validated.entry.headword === 'string' &&
-      validated.entry.pronunciation;
-
-    if (isDictionaryEntry) {
-      const entry = validated.entry as DictionaryEntry;
-
-      // Ensure slang/colloquial/pejorative come first (defensive sort if model didn't order)
-      const priority = (regs?: string[]) => {
-        const set = new Set((regs || []).map((r) => r.toLowerCase()));
-        if (set.has('slang') || set.has('colloquial') || set.has('pejorative') || set.has('vulgar')) return 0;
-        // neutral/general next
-        if (!set.has('technical') && !set.has('archaic')) return 1;
-        // specialized last
-        return 2;
-      };
-      const sortedSenses = [...entry.senses].sort((a, b) => {
-        const pA = priority(a.registers);
-        const pB = priority(b.registers);
-        if (pA !== pB) return pA - pB;
-        // broader region before narrow if tied
-        const broad = (regions?: string[]) => (regions || []).some((r) => r.toLowerCase() === 'latin america') ? 0 : 1;
-        const rA = broad(a.regions);
-        const rB = broad(b.regions);
-        if (rA !== rB) return rA - rB;
-        // sense_number as final tie-breaker
-        return (a.sense_number || 0) - (b.sense_number || 0);
-      });
-
-      const legacy = this.mapEntryToLegacy({ ...entry, senses: sortedSenses });
-
+    const normalizeRelated = (r: any) => {
+      if (!r) return { synonyms: [], antonyms: [] };
+      if (Array.isArray(r)) {
+        const syn: string[] = [];
+        const ant: string[] = [];
+        r.forEach((item: any) => {
+          const t = String(item?.type || '').toLowerCase();
+          if (t.includes('ant')) ant.push(item.word);
+          else syn.push(item.word);
+        });
+        return { synonyms: syn, antonyms: ant };
+      }
       return {
-        definitions: legacy.definitions,
-        examples: legacy.examples,
-        conjugations: legacy.conjugations,
-        audio: legacy.audio,
-        related: legacy.related,
-        entry: { ...entry, senses: sortedSenses }
+        synonyms: Array.isArray(r.synonyms) ? r.synonyms : [],
+        antonyms: Array.isArray(r.antonyms) ? r.antonyms : []
       };
-    }
-
-    // If we have a dictionary entry but no definitions, synthesize them from senses
-    if (isDictionaryEntry && (!validated.definitions || validated.definitions.length === 0)) {
-      const entry = validated.entry as DictionaryEntry;
-      console.log('🔄 Synthesizing definitions from entry senses for:', entry.headword);
-      const synthesizedDefinitions = this.synthesizeDefinitionsFromEntry(entry);
-      validated.definitions = synthesizedDefinitions;
-      console.log(`✅ Synthesized ${synthesizedDefinitions.length} definitions from ${entry.senses.length} senses`);
-    }
-
-
-    // Legacy structure passthrough (backward-compat)
-    return {
-      definitions: validated.definitions || [],
-      examples: validated.examples || [],
-      conjugations: validated.conjugations || {},
-      audio: validated.audio || { ipa: '', suggestions: [] },
-      related: Array.isArray(validated.related)
-        ? { synonyms: [], antonyms: [] } // Convert array format to object format
-        : (validated.related || { synonyms: [], antonyms: [] })
     };
+
+    const normalizeExamples = (arr: any): Array<{ es: string; en: string }> => {
+      const list = Array.isArray(arr) ? arr : [];
+      return list.map((e: any) => {
+        if (!e) return { es: '', en: '' };
+        if ('es' in e && 'en' in e) return { es: e.es || '', en: e.en || '' };
+        if ('text' in e && 'translation' in e) return { es: e.text || '', en: e.translation || '' };
+        return { es: String(e || ''), en: '' };
+      });
+    };
+
+    const normalizeSense = (s: any, idx: number): Sense => {
+      const examples = Array.isArray(s?.examples) ? normalizeExamples(s.examples) : [];
+      return {
+        sense_number: s?.sense_number ?? (idx + 1),
+        registers: Array.isArray(s?.registers) ? s.registers.map((x: any) => String(x || '')) : [],
+        regions: Array.isArray(s?.regions) ? s.regions.map((x: any) => String(x || '')) : [],
+        gloss: String(s?.gloss ?? s?.translation_es ?? s?.meaning ?? ''),
+        translation_es: s?.translation_es ?? s?.translation_es ?? (s?.meaning ?? s?.gloss) ?? '',
+        usage_notes: s?.usage_notes ?? '',
+        examples,
+        synonyms: Array.isArray(s?.synonyms) ? s.synonyms.map((x: any) => String(x || '')) : [],
+        antonyms: Array.isArray(s?.antonyms) ? s.antonyms.map((x: any) => String(x || '')) : [],
+        cross_references: Array.isArray(s?.cross_references) ? s.cross_references.map((x: any) => String(x || '')) : []
+      } as Sense;
+    };
+
+    // If it looks like a DictionaryEntry (headword + senses array), map directly
+    if (raw && typeof raw.headword === 'string' && Array.isArray(raw.senses)) {
+      const senses: Sense[] = raw.senses.map((s: any, i: number) => normalizeSense(s, i));
+      return {
+        headword: String(raw.headword),
+        pronunciation: raw.pronunciation || { ipa: '', syllabification: '' },
+        part_of_speech: raw.part_of_speech || 'unknown',
+        gender: raw.gender ?? null,
+        inflections: Array.isArray(raw.inflections) ? raw.inflections : [],
+        frequency: raw.frequency ?? 0,
+        senses,
+        audio: normalizeAudio(raw.audio),
+        conjugations: raw.conjugations || {},
+        related: normalizeRelated(raw.related),
+        examples: normalizeExamples(raw.examples),
+        definitions: raw.definitions || undefined,
+        entry: raw
+      } as any;
+    }
+
+    // Legacy/legacy-like response (definitions/examples/etc.)
+    const defs = Array.isArray(raw.definitions) ? raw.definitions : (raw.definitions || []);
+    const legacyExamples = normalizeExamples(raw.examples || []);
+    const synthesizedSenses: Sense[] = defs.map((d: any, i: number) => ({
+      sense_number: i + 1,
+      registers: [],
+      regions: [],
+      gloss: d?.meaning ?? d?.text ?? '',
+      translation_es: d?.meaning ?? d?.text ?? '',
+      usage_notes: d?.usage ?? '',
+      examples: (legacyExamples.slice(i, i + 1).length ? legacyExamples.slice(i, i + 1) : [{ es: d?.text ?? '', en: '' }]),
+      synonyms: [],
+      antonyms: [],
+      cross_references: []
+    }));
+
+    // If there is an entry object, prefer its fields
+    const entry = raw.entry || undefined;
+    const sensesFromEntry: Sense[] = entry && Array.isArray(entry.senses) ? entry.senses.map((s: any, i: number) => normalizeSense(s, i)) : [];
+
+    const finalSenses = sensesFromEntry.length ? sensesFromEntry : (synthesizedSenses.length ? synthesizedSenses : []);
+
+    // Normalize audio/related
+    const audio = normalizeAudio(raw.audio || (entry && entry.audio));
+    const related = normalizeRelated(raw.related || (entry && entry.related));
+    const examples = normalizeExamples(raw.examples || (entry && entry.examples));
+
+    return {
+      headword: String(raw.headword || entry?.headword || (defs[0]?.text ?? '')),
+      pronunciation: entry?.pronunciation || raw.pronunciation || { ipa: audio?.ipa || '', syllabification: (audio?.suggestions && audio.suggestions[0]) || '' },
+      part_of_speech: entry?.part_of_speech || raw.part_of_speech || 'unknown',
+      gender: entry?.gender ?? raw.gender ?? null,
+      inflections: entry?.inflections || raw.inflections || [],
+      frequency: entry?.frequency || raw.frequency || 0,
+      senses: finalSenses,
+      audio,
+      conjugations: raw.conjugations || entry?.conjugations || {},
+      related,
+      examples,
+      definitions: defs.length ? defs : undefined,
+      entry: entry
+    } as any;
   }
   /**
    * Normalize gender and inflections fields in a DictionaryEntry to match schema expectations.
@@ -403,22 +422,22 @@ export class TranslationService {
         (translatorPersona && typeof translatorPersona.system_prompt === 'string' ? translatorPersona.system_prompt : undefined) ||
         `You are a precise Spanish-English translator. Output ONLY valid JSON matching this exact structure without any additional text or explanations:
 {
-  "definitions": [
+  "headword": "primary headword in target language",
+  "pronunciation": { "ipa": "IPA transcription", "syllabification": "syllable breakdown" },
+  "part_of_speech": "noun|verb|adjective|adverb",
+  "gender": "m|f|mf|none",
+  "inflections": ["inflection forms"],
+  "frequency": 0,
+  "senses": [
     {
-      "meaning": "primary meaning in target language",
-      "pos": "noun|verb|adjective|adverb",
-      "usage": "formal|informal|slang|regional",
+      "sense_number": 1,
+      "registers": ["slang","colloquial","pejorative","vulgar","figurative","technical","archaic"],
+      "regions": ["Mexico","Caribbean","Venezuela","Guatemala","Latin America","Spain",...],
+      "gloss": "primary meaning in target language",
+      "usage_notes": "formal|informal|slang|regional",
       "examples": ["example sentence 1", "example sentence 2"]
     }
   ],
-  "examples": [
-    {
-      "es": "Spanish example sentence",
-      "en": "English translation of example",
-      "context": "usage context or notes"
-    }
-  ],
-  "conjugations": {},
   "audio": { "ipa": "", "suggestions": [] },
   "related": { "synonyms": [], "antonyms": [] }
 }
@@ -514,10 +533,13 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
 
           // If parse is successful, proceed
           openRouterResponse = this.transformOpenRouterResponse(parsedResult);
-          safeResult = this.applySafetyFilters(openRouterResponse);
+          if (!openRouterResponse) {
+            throw new Error('Transformed OpenRouter response is empty or invalid');
+          }
+          safeResult = this.applySafetyFilters(openRouterResponse as TranslationResponse);
 
           // Check for empty senses even after parsing/transformation. This is a common model issue.
-          if (safeResult.entry && (!safeResult.entry.senses || safeResult.entry.senses.length === 0)) {
+          if (safeResult.senses && (!safeResult.senses.length || safeResult.senses.length === 0)) {
             console.warn(`⚠️ Model ${currentModel} returned an entry with no senses for "${request.text}". Retrying.`);
             if (attempt === 0) continue; // Retry primary model once
             throw new Error('No senses in response after retry'); // Force failover after primary model retry
@@ -552,28 +574,36 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
       }
       
       // Post-transform: ensure literal-first for known verb+noun compounds (e.g., huelebicho/welebicho)
-      if ((safeResult as any)?.entry) {
-        this.ensureLiteralSenseForCompounds((safeResult as any).entry, request.text);
+      if ((safeResult as any)?.senses) {
+        this.ensureLiteralSenseForCompounds((safeResult as any).senses, request.text);
       }
       // Reorder senses to ensure literal comes first when present
-      if ((safeResult as any)?.entry?.senses?.length) {
-        (safeResult as any).entry.senses = this.reorderSensesLiteralFirst((safeResult as any).entry.senses);
+      if ((safeResult as any)?.senses?.length) {
+        (safeResult as any).senses = this.reorderSensesLiteralFirst((safeResult as any).senses);
       }
 
       // Backfill synthetic entry for legacy cached responses missing entry
-      if (!safeResult.entry && safeResult.definitions.length > 0) {
-        safeResult.entry = {
-          headword: request.text,
-          pronunciation: { ipa: '' },
-          part_of_speech: safeResult.definitions[0].pos ?? 'n',
-          gender: null,
-          inflections: [],
-          senses: safeResult.definitions.map((d, idx) => ({
-            sense_number: idx + 1,
-            gloss: d.meaning ?? d.text ?? request.text,
-            examples: (safeResult.examples ?? []).slice(idx, idx + 1).map(e => ({ es: e.text ?? request.text, en: e.translation ?? '' })),
-          })),
-        };
+      if (!safeResult.senses && safeResult.definitions && safeResult.definitions.length > 0) {
+        safeResult.senses = safeResult.definitions.map((d: any, idx: number) => ({
+          sense_number: idx + 1,
+          registers: [],
+          regions: [],
+          gloss: d.meaning ?? d.text ?? request.text,
+          usage_notes: d.usage ?? '',
+          examples: (safeResult.examples ?? []).slice(idx, idx + 1).map((e: any) => {
+            if ('es' in e && 'en' in e) {
+              return { es: e.es, en: e.en };
+            } else if ('text' in e && 'translation' in e) {
+              return { es: e.text ?? request.text, en: e.translation ?? '' };
+            } else {
+              return { es: request.text, en: '' };
+            }
+          }),
+          synonyms: [],
+          antonyms: [],
+          cross_references: [],
+          translation_es: d.meaning ?? d.text ?? request.text,
+        }));
       }
 
       // Persist raw response for debugging
@@ -585,15 +615,15 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
       // If the entry exists but has too few senses (e.g., only 1), force a retry prompting for full coverage.
       // Post-transform: ensure literal-first for known verb+noun compounds (e.g., huelebicho/welebicho)
       // Reorder senses to ensure literal comes first when present
-      const initialEntrySensesCount = (safeResult as any)?.entry?.senses?.length ?? 0;
-      if ((safeResult as any)?.entry?.senses?.length) {
-        (safeResult as any).entry.senses = this.reorderSensesLiteralFirst((safeResult as any).entry.senses);
+      const initialSensesCount = (safeResult as any)?.senses?.length ?? 0;
+      if ((safeResult as any)?.senses?.length) {
+        (safeResult as any).senses = this.reorderSensesLiteralFirst((safeResult as any).senses);
       }
 
-      const entrySensesCount = (safeResult as any)?.entry?.senses?.length ?? 0; // After all transformations
+      const sensesCount = (safeResult as any)?.senses?.length ?? 0; // After all transformations
 
-      if (entrySensesCount < 3) { // Use a defined threshold (e.g., 3 senses minimum)
-        console.info(`ℹ️ Insufficient sense coverage (${entrySensesCount}) for "${request.text}". This result will be returned, but ideally, the model or prompt should be adjusted for better coverage.`);
+      if (sensesCount < 3) { // Use a defined threshold (e.g., 3 senses minimum)
+        console.info(`ℹ️ Insufficient sense coverage (${sensesCount}) for "${request.text}". This result will be returned, but ideally, the model or prompt should be adjusted for better coverage.`);
         // We will not retry here, as the retry/failover logic is now upstream
       }
 
@@ -601,7 +631,7 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
       if (!isFallbackResult) {
         // Cache the result in memory
         this.cache.set(cacheKey, { data: safeResult, timestamp: Date.now() });
-        console.log(`💾 Cached translation result (memory) for "${request.text}" (definitions: ${safeResult.definitions?.length || 0}, hasEntry: ${!!safeResult.entry})`);
+        console.log(`💾 Cached translation result (memory) for "${request.text}" (senses: ${sensesCount}, hasEntry: ${!!safeResult.senses})`);
 
         // Persist to DB
         await this.saveTranslation(request.userId!, request.text, safeResult, request.sourceLang, request.targetLang);
@@ -627,19 +657,18 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
 
       // Final fallback JSON
       const finalFallback = {
-        definitions: [
-          {
-            text: `Error: "${request.text}" (service unavailable)`,
-            meaning: `Error: "${request.text}" (service unavailable)`,
-            pos: 'unknown',
-            usage: 'error'
-          }
-        ],
-        examples: [],
-        conjugations: {},
+        headword: request.text,
+        pronunciation: { ipa: '', syllabification: '' },
+        part_of_speech: 'unknown',
+        gender: null,
+        inflections: [],
+        frequency: 0,
+        senses: [],
         audio: { ipa: '', suggestions: [] },
-        related: { synonyms: [], antonyms: [] }
-      } as TranslationResponse;
+        conjugations: {},
+        related: { antonyms: [], synonyms: [] },
+        examples: [],
+      };
       console.log('🔄 TranslationService returning final fallback for', request.text);
       return finalFallback;
     }
@@ -887,10 +916,15 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
     };
 
     return {
-      definitions,
-      examples,
-      conjugations: {}, // not applicable for nouns; verb entries can fill later
+      headword: entry.headword,
+      pronunciation: entry.pronunciation,
+      part_of_speech: entry.part_of_speech,
+      gender: entry.gender,
+      inflections: entry.inflections,
+      frequency: entry.frequency,
+      senses: entry.senses,
       audio,
+      conjugations: {}, // not applicable for nouns; verb entries can fill later
       related
     };
   }
@@ -1198,21 +1232,54 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
     const resultString = JSON.stringify(result);
     if (this.containsUnsafeContent(resultString)) {
       console.warn('⚠️ Unsafe dictionary content detected, quarantining result');
-      // Return a safe fallback
+      // Return a safe fallback (shape-compatible with TranslationResponse)
       return {
-        definitions: [{
-          text: 'Content filtered for safety',
-          meaning: 'Content filtered for safety',
-          pos: 'filtered',
-          usage: 'safety'
-        }],
-        examples: [],
-        conjugations: {},
+        headword: 'Content filtered for safety',
+        pronunciation: { ipa: '', syllabification: '' },
+        part_of_speech: 'filtered',
+        gender: null,
+        inflections: [],
+        frequency: 0,
+        senses: [],
         audio: { ipa: '', suggestions: [] },
-        related: { synonyms: [], antonyms: [] }
+        conjugations: {},
+        related: { synonyms: [], antonyms: [] },
+        examples: [],
       };
     }
     return result;
+  }
+
+  private normalizeSenses(senses: any[]): any[] {
+    if (!senses) return [];
+    
+    return senses.map((sense: any) => {
+      // Normalize registers
+      if (Array.isArray(sense.registers)) {
+        sense.registers = sense.registers.map((r: any) => String(r || '').toLowerCase());
+      }
+      
+      // Normalize regions
+      if (Array.isArray(sense.regions)) {
+        sense.regions = sense.regions.map((r: any) => String(r || '').toLowerCase());
+      }
+      
+      // Normalize gloss
+      if (typeof sense.gloss === 'string') {
+        sense.gloss = sense.gloss.trim();
+      }
+      
+      // Normalize examples
+      if (Array.isArray(sense.examples)) {
+        sense.examples = sense.examples.map((ex: any) => ({
+          es: ex.es || '',
+          en: ex.en || '',
+          context: ex.context || undefined
+        }));
+      }
+      
+      return sense;
+    });
   }
 }
 
