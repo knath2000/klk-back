@@ -963,17 +963,13 @@ Normalization candidates (aliases to consider): ${this.buildNormalizationCandida
     return null;
   }
 
-  /**
-   * Persist a translation result for an authenticated user with deduplication.
-   * Deduplication policy: user_id + normalized query + language pair + stableStringify(response)
-   */
   async saveTranslation(userId: string, query: string, response: TranslationResponse, sourceLang?: string, targetLang?: string): Promise<void> {
     if (!userId) {
       console.warn('saveTranslation skipped: no userId provided');
       return;
     }
 
-    const languagePair = `${(sourceLang || 'auto').trim()}->${(targetLang || 'es').trim()}`;
+    const languagePair = this.languagePair(sourceLang, targetLang);
     const normalizedQuery = this.normalizeQuery(query || '');
     const normalizedTranslation = this.stableStringify(response || {});
 
