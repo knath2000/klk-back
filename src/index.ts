@@ -77,7 +77,7 @@ server.use(cors({
     "http://localhost:3000"
   ],
   credentials: true,
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
@@ -85,7 +85,15 @@ server.use(cors({
 server.use(cookieParser());
 
 // Add OPTIONS handler for preflight
-server.options('*', cors());
+server.options('*', cors({
+  origin: [
+    "https://klk-front.vercel.app",
+    "http://localhost:3000"
+  ],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 server.use(express.json());
 
