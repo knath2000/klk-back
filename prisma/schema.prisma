@@ -143,7 +143,7 @@ model Conversation {
 model ConversationMessage {
   id            String   @id @default(uuid())
   conversation_id String
-  conversation  Conversation @relation(fields: [conversation_id], references: [id])
+  conversation  Conversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
   role          String   // 'user' or 'assistant'
   content       String
   model         String
@@ -158,7 +158,7 @@ model ConversationMessage {
 model ConversationModel {
   id              String   @id @default(uuid())
   conversation_id String
-  conversation    Conversation @relation(fields: [conversation_id], references: [id])
+  conversation    Conversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
   model_id        String
   switched_at     DateTime @default(now())
   reason          String?
@@ -170,7 +170,7 @@ model ConversationModel {
 model SharedConversation {
   id              String   @id @default(uuid())
   conversation_id String
-  conversation    Conversation @relation(fields: [conversation_id], references: [id])
+  conversation    Conversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
   shared_with_id  String
   shared_with     User     @relation("SharedWith", fields: [shared_with_id], references: [id])
   shared_by_id    String
@@ -220,7 +220,7 @@ model UsageLog {
 model ConversationAnalytics {
   id              String   @id @default(uuid())
   conversation_id String
-  conversation    Conversation @relation(fields: [conversation_id], references: [id])
+  conversation    Conversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
   user_id         String
   user            User     @relation(fields: [user_id], references: [id])
   message_count   Int
