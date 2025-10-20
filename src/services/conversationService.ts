@@ -192,12 +192,12 @@ export class ConversationService {
           created_at: now
         }
       });
-      const currentCount = await tx.conversationMessage.count({
-        where: { conversation_id: messageData.conversation_id }
-      });
       await tx.conversation.update({
         where: { id: messageData.conversation_id },
-        data: { message_count: currentCount, updated_at: now }
+        data: {
+          message_count: { increment: 1 },
+          updated_at: now
+        }
       });
       return createdMsg;
     });

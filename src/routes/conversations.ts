@@ -131,6 +131,35 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+// PATCH handler for partial updates (e.g., persona_id)
+router.patch('/:id', async (req, res) => {
+  try {
+    const userId = (req as any).user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const conversation = await conversationService.getConversation(req.params.id);
+    
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    // Check if user owns this conversation
+    if (conversation.user_id !== userId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // For partial updates, merge with existing data
+    const updateData = { ...conversation, ...req.body };
+    const updatedConversation = await conversationService.updateConversation(req.params.id, updateData);
+    res.json(updatedConversation);
+  } catch (error) {
+    console.error('Error patching conversation:', error);
+    res.status(500).json({ error: 'Failed to update conversation' });
+  }
+});
+
 // Delete conversation
 router.delete('/:id', async (req, res) => {
   try {
