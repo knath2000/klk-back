@@ -542,6 +542,19 @@ class WebSocketService {
             }
             console.log('[DEBUG] User access verified or new conversation established');
 
+            // Ensure we always have a valid selected_country_key for downstream processing
+            if (!data.selected_country_key || !personaService.isValidCountryKey(data.selected_country_key)) {
+              const conversationPersona = (conversation as any)?.persona_id;
+              if (conversationPersona && personaService.isValidCountryKey(conversationPersona)) {
+                console.log('[DEBUG] Applying fallback persona from conversation record:', conversationPersona);
+                data.selected_country_key = conversationPersona;
+              } else {
+                const defaultPersonaKey = process.env.DEFAULT_PERSONA_KEY || 'mex';
+                console.warn('[WARN] No valid country selected; falling back to default persona:', defaultPersonaKey);
+                data.selected_country_key = defaultPersonaKey;
+              }
+            }
+
             // Resolve a definite conversation id for typed usage
             if (!conversationId) {
               console.error('[DEBUG] Conversation ID unresolved after creation/access check');
