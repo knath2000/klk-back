@@ -28,6 +28,7 @@ export declare class ConversationService {
      * Delete conversation
      */
     deleteConversation(id: string): Promise<void>;
+    deleteAllConversations(userId: string): Promise<void>;
     /**
      * Sync conversation metadata from client
      */

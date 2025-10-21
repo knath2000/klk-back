@@ -19,6 +19,28 @@ router.get('/', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch conversations' });
     }
 });
+// Delete all conversations for the authenticated user
+router.delete('/', async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+        // Require an explicit confirmation flag to avoid accidental mass deletion.
+        // Accept either query ?confirm=true or JSON body { confirm: true }
+        const confirmQuery = String(req.query?.confirm ?? '').toLowerCase() === 'true';
+        const confirmBody = req.body && (req.body.confirm === true || String(req.body.confirm).toLowerCase() === 'true');
+        if (!confirmQuery && !confirmBody) {
+            return res.status(400).json({ error: 'Missing confirmation. Call DELETE /api/conversations?confirm=true to proceed.' });
+        }
+        await conversationService_1.conversationService.deleteAllConversations(userId);
+        return res.status(204).send();
+    }
+    catch (error) {
+        console.error('Error deleting all conversations:', error);
+        return res.status(500).json({ error: 'Failed to delete conversations' });
+    }
+});
 // Create new conversation
 router.post('/', async (req, res) => {
     try {
@@ -26,12 +48,21 @@ router.post('/', async (req, res) => {
         if (!userId) {
             return res.status(401).json({ error: 'Unauthorized' });
         }
-        const { title, model, persona_id } = req.body;
+        const { title, model, persona_id, message_count } = req.body;
+        // Guard: reject conversations with no messages to prevent empty conversation accumulation
+        // Conversations should only be persisted once the user sends their first message
+        if (message_count === 0 || message_count === null || message_count === undefined) {
+            console.log(`ℹ️ Rejecting empty conversation creation for user ${userId}: message_count=${message_count}`);
+            return res.status(400).json({
+                error: 'Cannot create conversation without messages. Send your first message to create a conversation.'
+            });
+        }
         const conversation = await conversationService_1.conversationService.createConversation({
             user_id: userId,
             title: title || 'New Conversation',
             model: model || 'gpt-4o-mini',
-            persona_id
+            persona_id,
+            message_count: message_count || 0
         }); // Type assertion to bypass strict typing for now
         res.status(201).json(conversation);
     }
@@ -82,6 +113,31 @@ router.put('/:id', async (req, res) => {
     }
     catch (error) {
         console.error('Error updating conversation:', error);
+        res.status(500).json({ error: 'Failed to update conversation' });
+    }
+});
+// PATCH handler for partial updates (e.g., persona_id)
+router.patch('/:id', async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+        const conversation = await conversationService_1.conversationService.getConversation(req.params.id);
+        if (!conversation) {
+            return res.status(404).json({ error: 'Conversation not found' });
+        }
+        // Check if user owns this conversation
+        if (conversation.user_id !== userId) {
+            return res.status(403).json({ error: 'Forbidden' });
+        }
+        // For partial updates, merge with existing data
+        const updateData = { ...conversation, ...req.body };
+        const updatedConversation = await conversationService_1.conversationService.updateConversation(req.params.id, updateData);
+        res.json(updatedConversation);
+    }
+    catch (error) {
+        console.error('Error patching conversation:', error);
         res.status(500).json({ error: 'Failed to update conversation' });
     }
 });

@@ -101,6 +101,38 @@ class ConversationService {
             throw e;
         }
     }
+    // New: Delete all conversations and dependent data for a given userId
+    async deleteAllConversations(userId) {
+        const startTime = Date.now();
+        console.log(`[ConversationService] deleteAllConversations started for user ${userId} at ${new Date(startTime).toISOString()}`);
+        try {
+            // Find all conversation IDs for the user
+            const convs = await prisma.conversation.findMany({
+                where: { user_id: userId },
+                select: { id: true }
+            });
+            const ids = convs.map(c => c.id);
+            if (ids.length === 0) {
+                console.log(`[ConversationService] No conversations found for user ${userId}; nothing to delete.`);
+                return;
+            }
+            // Perform deletions in a single transaction to ensure integrity
+            await prisma.$transaction(async (tx) => {
+                await tx.conversationMessage.deleteMany({ where: { conversation_id: { in: ids } } });
+                await tx.conversationModel.deleteMany({ where: { conversation_id: { in: ids } } });
+                await tx.sharedConversation.deleteMany({ where: { conversation_id: { in: ids } } });
+                await tx.conversationAnalytics.deleteMany({ where: { conversation_id: { in: ids } } });
+                // Finally delete the conversations themselves
+                await tx.conversation.deleteMany({ where: { id: { in: ids } } });
+            });
+            console.log(`[ConversationService] deleteAllConversations completed for user ${userId} at ${new Date().toISOString()}, deleted ${ids.length} conversations, time: ${Date.now() - startTime}ms`);
+        }
+        catch (e) {
+            console.error('[ConversationService] Error deleting all conversations for user:', userId, e?.message || e);
+            // Re-throw so callers can surface errors
+            throw e;
+        }
+    }
     /**
      * Sync conversation metadata from client
      */
@@ -137,12 +169,12 @@ class ConversationService {
                     created_at: now
                 }
             });
-            const currentCount = await tx.conversationMessage.count({
-                where: { conversation_id: messageData.conversation_id }
-            });
             await tx.conversation.update({
                 where: { id: messageData.conversation_id },
-                data: { message_count: currentCount, updated_at: now }
+                data: {
+                    message_count: { increment: 1 },
+                    updated_at: now
+                }
             });
             return createdMsg;
         });
